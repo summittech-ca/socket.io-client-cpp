@@ -46,6 +46,7 @@ namespace sio
         m_protocol_version(version)
     {
         using websocketpp::log::alevel;
+        m_client.clear_access_channels(alevel::frame_header|alevel::frame_payload);
 #ifndef DEBUG
         m_client.clear_access_channels(alevel::all);
         m_client.set_access_channels(alevel::connect|alevel::disconnect|alevel::app);
