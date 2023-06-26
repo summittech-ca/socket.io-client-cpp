@@ -12,8 +12,8 @@ using std::stringstream;
 
 namespace sio
 {
-    client::client():
-        m_impl(new client_impl())
+    client::client(ProtocolVersion version):
+        m_impl(new client_impl(version))
     {
     }
     
@@ -67,10 +67,10 @@ namespace sio
         m_impl->clear_socket_listeners();
     }
 	
-    void client::set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password)
-    {
-        m_impl->set_proxy_basic_auth(uri, username, password);
-    }
+    // void client::set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password)
+    // {
+    //     m_impl->set_proxy_basic_auth(uri, username, password);
+    // }
 
     void client::connect(const std::string& uri)
     {

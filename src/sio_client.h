@@ -14,6 +14,11 @@
 namespace sio
 {
     class client_impl;
+
+    enum ProtocolVersion {
+        ProtocolVersion3 = 3,
+        ProtocolVersion4 = 4
+    };
     
     class client {
     public:
@@ -31,7 +36,7 @@ namespace sio
         
         typedef std::function<void(std::string const& nsp)> socket_listener;
         
-        client();
+        client(ProtocolVersion version);
         ~client();
         
         //set listeners and event bindings.
@@ -87,7 +92,7 @@ namespace sio
         
         void sync_close();
         
-        void set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password);
+        // void set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password);
 		
         bool opened() const;
         

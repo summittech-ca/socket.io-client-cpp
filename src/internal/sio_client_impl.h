@@ -12,31 +12,9 @@
 #define INTIALIZER(__TYPE__) (__TYPE__)
 #endif
 #include <websocketpp/client.hpp>
-#if _DEBUG || DEBUG
-#if SIO_TLS
-#include <websocketpp/config/debug_asio.hpp>
-typedef websocketpp::config::debug_asio_tls client_config;
-#else
-#include <websocketpp/config/debug_asio_no_tls.hpp>
-typedef websocketpp::config::debug_asio client_config;
-#endif //SIO_TLS
-#else
-#if SIO_TLS
-#include <websocketpp/config/asio_client.hpp>
-typedef websocketpp::config::asio_tls_client client_config;
-#else
-#include <websocketpp/config/asio_no_tls_client.hpp>
-typedef websocketpp::config::asio_client client_config;
-#endif //SIO_TLS
-#endif //DEBUG
+#include "websocketpp-stack.h"
 
-#if SIO_TLS
-#include <asio/ssl/context.hpp>
-#endif
-
-#include <asio/steady_timer.hpp>
-#include <asio/error_code.hpp>
-#include <asio/io_service.hpp>
+typedef websocketpp::config::summit_tls_client client_config;
 
 #include <atomic>
 #include <memory>
@@ -44,6 +22,7 @@ typedef websocketpp::config::asio_client client_config;
 #include <thread>
 #include "../sio_client.h"
 #include "sio_packet.h"
+#include "timer_adapter.h"
 
 namespace sio
 {
@@ -62,7 +41,7 @@ namespace sio
             con_closed
         };
         
-        client_impl();
+        client_impl(ProtocolVersion version);
         
         ~client_impl();
         
@@ -130,14 +109,14 @@ namespace sio
 
         void set_logs_verbose();
 		
-        void set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password);
+        // void set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password);
 
     protected:
         void send(packet& p);
         
         void remove_socket(std::string const& nsp);
         
-        asio::io_service& get_io_service();
+        // asio::io_service& get_io_service();
         
         void on_socket_closed(std::string const& nsp);
         
@@ -152,11 +131,15 @@ namespace sio
         
         void send_impl(std::shared_ptr<const std::string> const&  payload_ptr,frame::opcode::value opcode);
         
-        void ping(const asio::error_code& ec);
+        // void ping(const asio::error_code& ec);
         
-        void timeout_ping(const asio::error_code& ec);
+        void timeout_ping(const std::error_code& ec);
 
-        void timeout_reconnect(asio::error_code const& ec);
+        void timeout_send_ping(const std::error_code& ec);
+
+        void timeout_wait_pong(const std::error_code& ec);
+
+        void timeout_reconnect(std::error_code const& ec);
 
         unsigned next_delay() const;
 
@@ -181,12 +164,18 @@ namespace sio
 
         void on_ping();
 
+        void on_pong();
+
         void reset_states();
 
         void clear_timers();
 
         void update_ping_timeout_timer();
+
+        void update_send_ping_timer();
         
+        void update_wait_pong_timeout_timer();
+
         #if SIO_TLS
         typedef websocketpp::lib::shared_ptr<asio::ssl::context> context_ptr;
         
@@ -205,9 +194,9 @@ namespace sio
         std::string m_query_string;
         std::map<std::string, std::string> m_http_headers;
         message::ptr m_auth;
-        std::string m_proxy_base_url;
-        std::string m_proxy_basic_username;
-        std::string m_proxy_basic_password;
+        // std::string m_proxy_base_url;
+        // std::string m_proxy_basic_username;
+        // std::string m_proxy_basic_password;
 
         unsigned int m_ping_interval;
         unsigned int m_ping_timeout;
@@ -216,9 +205,13 @@ namespace sio
         
         packet_manager m_packet_mgr;
         
-        std::unique_ptr<asio::steady_timer> m_ping_timeout_timer;
+        std::unique_ptr<SAL::timer> m_ping_timeout_timer;
 
-        std::unique_ptr<asio::steady_timer> m_reconn_timer;
+        std::unique_ptr<SAL::timer> m_send_ping_timer;
+
+        std::unique_ptr<SAL::timer> m_wait_pong_timeout_timer;
+
+        std::unique_ptr<SAL::timer> m_reconn_timer;
         
         con_state m_con_state;
         
@@ -242,6 +235,8 @@ namespace sio
         unsigned m_reconn_attempts;
 
         unsigned m_reconn_made;
+
+        ProtocolVersion m_protocol_version;
 
         std::atomic<bool> m_abort_retries { false };
 

@@ -1,8 +1,7 @@
 #include "sio_socket.h"
 #include "internal/sio_packet.h"
 #include "internal/sio_client_impl.h"
-#include <asio/steady_timer.hpp>
-#include <asio/error_code.hpp>
+#include "timer_adapter.h"
 #include <queue>
 #include <chrono>
 #include <cstdarg>
@@ -159,7 +158,7 @@ namespace sio
         
         void ack(int msgId,string const& name,message::list const& ack_message);
         
-        void timeout_connection(const asio::error_code &ec);
+        void timeout_connection(const std::error_code &ec);
         
         void send_connect();
         
@@ -181,7 +180,7 @@ namespace sio
         
         error_listener m_error_listener;
         
-        std::unique_ptr<asio::steady_timer> m_connection_timer;
+        std::unique_ptr<SAL::timer> m_connection_timer;
         
         std::queue<packet> m_packet_queue;
         
@@ -273,10 +272,12 @@ namespace sio
         NULL_GUARD(m_client);
         packet p(packet::type_connect, m_nsp, m_auth);
         m_client->send(p);
-        m_connection_timer.reset(new asio::steady_timer(m_client->get_io_service()));
-        asio::error_code ec;
-        m_connection_timer->expires_from_now(std::chrono::milliseconds(20000), ec);
-        m_connection_timer->async_wait(std::bind(&socket::impl::timeout_connection,this, std::placeholders::_1));
+        m_connection_timer.reset();
+        m_connection_timer.reset(SAL::timer_cb::set_timer(20000, std::bind(&socket::impl::timeout_connection,this, std::placeholders::_1)));
+        // m_connection_timer.reset(new asio::steady_timer(m_client->get_io_service()));
+        // asio::error_code ec;
+        // m_connection_timer->expires_from_now(std::chrono::milliseconds(20000), ec);
+        // m_connection_timer->async_wait(std::bind(&socket::impl::timeout_connection,this, std::placeholders::_1));
     }
     
     void socket::impl::close()
@@ -286,14 +287,14 @@ namespace sio
         {
             packet p(packet::type_disconnect,m_nsp);
             send_packet(p);
-            
-            if(!m_connection_timer)
-            {
-                m_connection_timer.reset(new asio::steady_timer(m_client->get_io_service()));
-            }
-            asio::error_code ec;
-            m_connection_timer->expires_from_now(std::chrono::milliseconds(3000), ec);
-            m_connection_timer->async_wait(std::bind(&socket::impl::on_close, this));
+            m_connection_timer.reset(SAL::timer_cb::set_timer(3000, std::bind(&socket::impl::on_close, this)));            
+            // if(!m_connection_timer)
+            // {
+            //     m_connection_timer.reset(new asio::steady_timer(m_client->get_io_service()));
+            // }
+            // asio::error_code ec;
+            // m_connection_timer->expires_from_now(std::chrono::milliseconds(3000), ec);
+            // m_connection_timer->async_wait(std::bind(&socket::impl::on_close, this));
         }
     }
     
@@ -401,6 +402,8 @@ namespace sio
                         {
                             mlist.push(array_ptr->get_vector()[i]);
                         }
+                        LOG("Received SocketIo Event Nsp="<<p.get_nsp()<<", PackId="<<p.get_pack_id()<<
+                            ", NamePtr="<<name_ptr->get_string()<<std::endl);
                         this->on_socketio_event(p.get_nsp(), p.get_pack_id(),name_ptr->get_string(), std::move(mlist));
                     }
                 }
@@ -475,7 +478,7 @@ namespace sio
         if(m_error_listener)m_error_listener(err_message);
     }
     
-    void socket::impl::timeout_connection(const asio::error_code &ec)
+    void socket::impl::timeout_connection(const std::error_code &ec)
     {
         NULL_GUARD(m_client);
         if(ec)
