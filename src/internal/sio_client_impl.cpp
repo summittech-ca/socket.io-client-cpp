@@ -245,11 +245,11 @@ namespace sio
         do{
             websocketpp::uri uo(uri);
             ostringstream ss;
-#if SIO_TLS
-            ss<<"wss://";
-#else
-            ss<<"ws://";
-#endif
+            if (uo.get_secure()) {
+                ss<<"wss://";
+            } else {
+                ss<<"ws://";
+            }
             const std::string host(uo.get_host());
             // As per RFC2732, literal IPv6 address should be enclosed in "[" and "]".
             if(host.find(':')!=std::string::npos){
