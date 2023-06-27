@@ -349,7 +349,8 @@ namespace sio
     
     void socket::impl::on_open()
     {
-        send_connect();
+        // [2023-06-27 EB]: This is not strictly necessary and causes double connect send from router
+        // send_connect();
     }
     
     void socket::impl::on_disconnect()
