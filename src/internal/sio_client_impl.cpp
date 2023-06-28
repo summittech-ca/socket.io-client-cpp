@@ -24,7 +24,6 @@
 // Source: http://think-async.com/Asio/asio-1.10.6/doc/asio/using.html
 // #include <asio/ssl/impl/src.hpp>
 #endif
-#include "timer_adapter.h"
 
 using std::chrono::milliseconds;
 using namespace std;

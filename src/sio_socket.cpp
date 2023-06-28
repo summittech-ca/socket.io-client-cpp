@@ -1,7 +1,6 @@
 #include "sio_socket.h"
 #include "internal/sio_packet.h"
 #include "internal/sio_client_impl.h"
-#include "timer_adapter.h"
 #include <queue>
 #include <chrono>
 #include <cstdarg>

@@ -12,7 +12,8 @@
 #define INTIALIZER(__TYPE__) (__TYPE__)
 #endif
 #include <websocketpp/client.hpp>
-#include "websocketpp-stack.h"
+#include "WebsocketSummitAdapter.h"
+#include "WebsocketSummitTimer.h"
 
 typedef websocketpp::config::summit_tls_client client_config;
 
@@ -22,7 +23,6 @@ typedef websocketpp::config::summit_tls_client client_config;
 #include <thread>
 #include "../sio_client.h"
 #include "sio_packet.h"
-#include "timer_adapter.h"
 
 namespace sio
 {
