@@ -13,11 +13,12 @@
 #include <mutex>
 #include <cmath>
 // Comment this out to disable handshake logging to stdout
-#if DEBUG || _DEBUG
-#define LOG(x) std::cout << x
-#else
-#define LOG(x)
-#endif
+
+#include "SAL/Log/Log.h"
+
+namespace {
+    LOGGER_NAME("socketio.client")
+}
 
 #if SIO_TLS
 // If using Asio's SSL support, you will also need to add this #include.
@@ -308,7 +309,7 @@ namespace sio
 
     void client_impl::close_impl(close::status::value const& code,string const& reason)
     {
-        LOG("Close by reason:"<<reason << endl);
+        SAL_FUNC_INFO("Close by reason: %s", reason.c_str());
         if(m_reconn_timer)
         {
             m_reconn_timer->cancel();
@@ -344,7 +345,7 @@ namespace sio
         {
             return;
         }
-        LOG("Ping timeout"<<endl);
+        SAL_FUNC_ERROR("Ping timeout");
         close_impl(close::status::policy_violation,"Ping timeout");
     }
 
@@ -355,7 +356,7 @@ namespace sio
             return;
         }
 
-        LOG("Send ping"<<endl);
+        SAL_FUNC_DEBUG("Send ping");
         packet p(packet::frame_ping);
         m_packet_mgr.encode(p, [&](bool /*isBin*/,shared_ptr<const string> payload)
         {
@@ -371,7 +372,7 @@ namespace sio
         {
             return;
         }
-        LOG("Pong timeout"<<endl);
+        SAL_FUNC_ERROR("Pong timeout");
         close_impl(close::status::policy_violation,"Pong timeout");
     }
 
@@ -386,7 +387,7 @@ namespace sio
             m_con_state = con_opening;
             m_reconn_made++;
             this->reset_states();
-            LOG("Reconnecting..."<<endl);
+            SAL_FUNC_INFO("Reconnecting...");
             if(m_reconnecting_listener) m_reconnecting_listener();
             // m_client.get_io_service().dispatch(std::bind(&client_impl::connect_impl,this,m_base_url,m_query_string));
         }
@@ -428,7 +429,7 @@ namespace sio
     void client_impl::on_fail(connection_hdl)
     {
         if (m_con_state == con_closing) {
-            LOG("Connection failed while closing." << endl);
+            SAL_FUNC_WARN("Connection failed while closing.");
             this->close();
             return;
         }
@@ -436,10 +437,10 @@ namespace sio
         m_con.reset();
         m_con_state = con_closed;
         this->sockets_invoke_void(&sio::socket::on_disconnect);
-        LOG("Connection failed." << endl);
+        SAL_FUNC_ERROR("Connection failed.");
         if(m_reconn_made<m_reconn_attempts && !m_abort_retries)
         {
-            LOG("Reconnect for attempt:"<<m_reconn_made<<endl);
+            SAL_FUNC_WARN("Reconnect for attempt: %lu", m_reconn_made);
             unsigned delay = this->next_delay();
             if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
             m_reconn_timer.reset(SAL::timer_cb::set_timer(delay, std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1)));
@@ -457,12 +458,12 @@ namespace sio
     void client_impl::on_open(connection_hdl con)
     {
         if (m_con_state == con_closing) {
-            LOG("Connection opened while closing." << endl);
+            SAL_FUNC_WARN("Connection opened while closing.");
             this->close();
             return;
         }
 
-        LOG("Connected." << endl);
+        SAL_FUNC_INFO("Connected.");
         m_con_state = con_opened;
         m_con = con;
         m_reconn_made = 0;
@@ -473,14 +474,14 @@ namespace sio
     
     void client_impl::on_close(connection_hdl con)
     {
-        LOG("Client Disconnected." << endl);
+        SAL_FUNC_INFO("Client Disconnected.");
         con_state m_con_state_was = m_con_state;
         m_con_state = con_closed;
         lib::error_code ec;
         close::status::value code = close::status::normal;
         client_type::connection_ptr conn_ptr  = m_client.get_con_from_hdl(con, ec);
         if (ec) {
-            LOG("OnClose get conn failed"<<ec<<endl);
+            SAL_FUNC_WARN("OnClose get conn failed ec: %d / %s", (int)ec.value(), ec.message().c_str());
         }
         else
         {
@@ -504,7 +505,7 @@ namespace sio
             this->sockets_invoke_void(&sio::socket::on_disconnect);
             if(m_reconn_made<m_reconn_attempts && !m_abort_retries)
             {
-                LOG("Reconnect for attempt:"<<m_reconn_made<<endl);
+                SAL_FUNC_WARN("Reconnect for attempt: %d", m_reconn_made);
                 unsigned delay = this->next_delay();
                 if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
                 m_reconn_timer.reset(SAL::timer_cb::set_timer(delay, std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1)));
@@ -597,7 +598,7 @@ failed:
 
     void client_impl::on_pong()
     {
-        LOG("Got pong"<<endl);
+        SAL_FUNC_DEBUG("Got pong");
 
         // Clear the waiting-for-ping timer
         if (m_wait_pong_timeout_timer)
@@ -641,14 +642,14 @@ failed:
     
     void client_impl::on_encode(bool isBinary,shared_ptr<const string> const& payload)
     {
-        LOG("encoded payload length:"<<payload->length()<<endl);
+        SAL_FUNC_VERBOSE("encoded payload length: %lu", payload->length());
         // m_client.get_io_service().dispatch(std::bind(&client_impl::send_impl,this,payload,isBinary?frame::opcode::binary:frame::opcode::text));
         send_impl(payload,isBinary?frame::opcode::binary:frame::opcode::text);
     }
     
     void client_impl::clear_timers()
     {
-        LOG("clear timers"<<endl);
+        SAL_FUNC_INFO("clear timers");
         std::error_code ec;
         if(m_ping_timeout_timer)
         {
@@ -700,7 +701,7 @@ failed:
             // in protocol v3, the client sends a ping, and the server answers with a pong
             return;
         }
-        LOG("Set send_ping_timer "<<m_ping_interval<<endl);
+        SAL_FUNC_DEBUG("Set send_ping_timer %lu", m_ping_interval);
         if (m_send_ping_timer)
         {
             m_send_ping_timer->cancel();
@@ -711,7 +712,7 @@ failed:
 
     void client_impl::update_wait_pong_timeout_timer() {
 
-        LOG("Set wait_pong_timeout_timer "<<m_ping_timeout<<endl);
+        SAL_FUNC_DEBUG("Set wait_pong_timeout_timer %lu", m_ping_timeout);
         if (m_wait_pong_timeout_timer)
         {
             m_wait_pong_timeout_timer->cancel();

@@ -6,11 +6,12 @@
 #include <cstdarg>
 #include <functional>
 
-#if DEBUG || _DEBUG
-#define LOG(x) std::cout << x
-#else
-#define LOG(x)
-#endif
+#include "SAL/Log/Log.h"
+
+namespace {
+    LOGGER_NAME("socketio.socket")
+}
+
 
 #define NULL_GUARD(_x_)  \
     if(_x_ == NULL) return
@@ -375,21 +376,21 @@ namespace sio
             // Connect open
             case packet::type_connect:
             {
-                LOG("Received Message type (Connect)"<<std::endl);
+                SAL_FUNC_INFO("Received Message type (Connect)");
 
                 this->on_connected();
                 break;
             }
             case packet::type_disconnect:
             {
-                LOG("Received Message type (Disconnect)"<<std::endl);
+                SAL_FUNC_INFO("Received Message type (Disconnect)");
                 this->on_close();
                 break;
             }
             case packet::type_event:
             case packet::type_binary_event:
             {
-                LOG("Received Message type (Event)"<<std::endl);
+                SAL_FUNC_DEBUG("Received Message type (Event)");
                 const message::ptr ptr = p.get_message();
                 if(ptr->get_flag() == message::flag_array)
                 {
@@ -402,9 +403,9 @@ namespace sio
                         {
                             mlist.push(array_ptr->get_vector()[i]);
                         }
-                        LOG("Received SocketIo Event Nsp="<<p.get_nsp()<<", PackId="<<p.get_pack_id()<<
-                            ", NamePtr="<<name_ptr->get_string()<<std::endl);
-                        this->on_socketio_event(p.get_nsp(), p.get_pack_id(),name_ptr->get_string(), std::move(mlist));
+                        SAL_FUNC_DEBUG("Received SocketIo Event Nsp=%s, PackId=%u, NamePtr=%s",
+                            p.get_nsp().c_str(), p.get_pack_id(), name_ptr->get_string().c_str());
+                        this->on_socketio_event(p.get_nsp(), (int)p.get_pack_id(),name_ptr->get_string(), std::move(mlist));
                     }
                 }
 
@@ -414,7 +415,7 @@ namespace sio
             case packet::type_ack:
             case packet::type_binary_ack:
             {
-                LOG("Received Message type (ACK)"<<std::endl);
+                SAL_FUNC_DEBUG("Received Message type (ACK)");
                 const message::ptr ptr = p.get_message();
                 if(ptr->get_flag() == message::flag_array)
                 {
@@ -430,7 +431,7 @@ namespace sio
                 // Error
             case packet::type_error:
             {
-                LOG("Received Message type (ERROR)"<<std::endl);
+                SAL_FUNC_WARN("Received Message type (ERROR)");
                 this->on_socketio_error(p.get_message());
                 break;
             }
@@ -486,7 +487,7 @@ namespace sio
             return;
         }
         m_connection_timer.reset();
-        LOG("Connection timeout,close socket."<<std::endl);
+        SAL_FUNC_ERROR("Connection timeout,close socket.");
         //Should close socket if no connected message arrive.Otherwise we'll never ask for open again.
         this->on_close();
     }
