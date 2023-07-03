@@ -440,7 +440,7 @@ namespace sio
         SAL_FUNC_ERROR("Connection failed.");
         if(m_reconn_made<m_reconn_attempts && !m_abort_retries)
         {
-            SAL_FUNC_WARN("Reconnect for attempt: %lu", m_reconn_made);
+            SAL_FUNC_WARN("Reconnect for attempt: %" PRId64, (int64_t)m_reconn_made);
             unsigned delay = this->next_delay();
             if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
             m_reconn_timer.reset(SAL::timer_cb::set_timer(delay, std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1)));
@@ -642,7 +642,7 @@ failed:
     
     void client_impl::on_encode(bool isBinary,shared_ptr<const string> const& payload)
     {
-        SAL_FUNC_VERBOSE("encoded payload length: %lu", payload->length());
+        SAL_FUNC_VERBOSE("encoded payload length: %ld", (long) payload->length());
         // m_client.get_io_service().dispatch(std::bind(&client_impl::send_impl,this,payload,isBinary?frame::opcode::binary:frame::opcode::text));
         send_impl(payload,isBinary?frame::opcode::binary:frame::opcode::text);
     }
@@ -701,7 +701,7 @@ failed:
             // in protocol v3, the client sends a ping, and the server answers with a pong
             return;
         }
-        SAL_FUNC_DEBUG("Set send_ping_timer %lu", m_ping_interval);
+        SAL_FUNC_DEBUG("Set send_ping_timer %" PRId64, (int64_t)m_ping_interval);
         if (m_send_ping_timer)
         {
             m_send_ping_timer->cancel();
@@ -712,7 +712,7 @@ failed:
 
     void client_impl::update_wait_pong_timeout_timer() {
 
-        SAL_FUNC_DEBUG("Set wait_pong_timeout_timer %lu", m_ping_timeout);
+        SAL_FUNC_DEBUG("Set wait_pong_timeout_timer %" PRId64, (int64_t)m_ping_timeout);
         if (m_wait_pong_timeout_timer)
         {
             m_wait_pong_timeout_timer->cancel();
