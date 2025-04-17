@@ -287,7 +287,11 @@ namespace sio
         {
             packet p(packet::type_disconnect,m_nsp);
             send_packet(p);
-            m_connection_timer.reset(SAL::timer_cb::set_timer(3000, std::bind(&socket::impl::on_close, this)));            
+
+            // Skip the delay by calling on_close immediately. Even though it is very aggressive, the server should be able to handle that
+            // m_connection_timer.reset(SAL::timer_cb::set_timer(3000, std::bind(&socket::impl::on_close, this)));
+            on_close();
+
             // if(!m_connection_timer)
             // {
             //     m_connection_timer.reset(new asio::steady_timer(m_client->get_io_service()));
