@@ -27,7 +27,6 @@ namespace {
 #endif
 
 using std::chrono::milliseconds;
-using namespace std;
 
 SAL::TimerManagerPtr getTimerMgr();
 
