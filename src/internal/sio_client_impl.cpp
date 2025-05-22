@@ -68,20 +68,20 @@ namespace sio
 
         m_packet_mgr.set_encode_callback(std::bind(&client_impl::on_encode,this,_1,_2));
     }
-    
+
     client_impl::~client_impl()
     {
         this->sockets_invoke_void(&sio::socket::on_close);
         sync_close();
     }
-	
+
     // void client_impl::set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password)
     // {
     //     m_proxy_base_url = uri;
     //     m_proxy_basic_username = username;
     //     m_proxy_basic_password = password;
     // }
-    
+
     void client_impl::connect(const string& uri, const map<string,string>& query, const map<string, string>& headers, const message::ptr& auth)
     {
         if(m_reconn_timer)
@@ -279,7 +279,7 @@ namespace sio
             for( auto&& header: m_http_headers ) {
                 con->replace_header(header.first, header.second);
             }
-			
+
             // if (!m_proxy_base_url.empty()) {
             //     con->set_proxy(m_proxy_base_url, ec);
             //     if (ec) {
@@ -396,8 +396,8 @@ namespace sio
     unsigned client_impl::next_delay() const
     {
         //no jitter, fixed power root.
-        unsigned reconn_made = min<unsigned>(m_reconn_made,32);//protect the pow result to be too big.
-        return static_cast<unsigned>(min<double>(m_reconn_delay * pow(1.5,reconn_made),m_reconn_delay_max));
+        unsigned reconn_made = std::min<unsigned>(m_reconn_made,32);//protect the pow result to be too big.
+        return static_cast<unsigned>(std::min<double>(m_reconn_delay * pow(1.5,reconn_made),m_reconn_delay_max));
     }
 
     socket::ptr client_impl::get_socket_locked(string const& nsp)
@@ -454,7 +454,7 @@ namespace sio
             if(m_fail_listener)m_fail_listener();
         }
     }
-    
+
     void client_impl::on_open(connection_hdl con)
     {
         if (m_con_state == con_closing) {
@@ -471,7 +471,7 @@ namespace sio
         this->socket("");
         if(m_open_listener)m_open_listener();
     }
-    
+
     void client_impl::on_close(connection_hdl con)
     {
         SAL_FUNC_INFO("Client Disconnected.");
@@ -487,7 +487,7 @@ namespace sio
         {
             code = conn_ptr->get_local_close_code();
         }
-        
+
         m_con.reset();
         this->clear_timers();
         client::close_reason reason;
@@ -517,19 +517,19 @@ namespace sio
             }
             reason = client::close_reason_drop;
         }
-        
+
         if(m_close_listener)
         {
             m_close_listener(reason);
         }
     }
-    
+
     void client_impl::on_message(connection_hdl, client_type::message_ptr msg)
     {
         // Parse the incoming message according to socket.IO rules
         m_packet_mgr.put_payload(msg->get_payload());
     }
-    
+
     void client_impl::on_handshake(message::ptr const& message)
     {
         if(message && message->get_flag() == message::flag_object)
@@ -639,33 +639,33 @@ failed:
             break;
         }
     }
-    
+
     void client_impl::on_encode(bool isBinary,shared_ptr<const string> const& payload)
     {
         SAL_FUNC_VERBOSE("encoded payload length: %ld", (long) payload->length());
         // m_client.get_io_service().dispatch(std::bind(&client_impl::send_impl,this,payload,isBinary?frame::opcode::binary:frame::opcode::text));
         send_impl(payload,isBinary?frame::opcode::binary:frame::opcode::text);
     }
-    
+
     void client_impl::clear_timers()
     {
         SAL_FUNC_INFO("clear timers");
         std::error_code ec;
         if(m_ping_timeout_timer)
         {
-            
+
             m_ping_timeout_timer->cancel(ec);
             m_ping_timeout_timer.reset();
         }
         if(m_send_ping_timer)
         {
-            
+
             m_send_ping_timer->cancel(ec);
             m_send_ping_timer.reset();
         }
         if(m_wait_pong_timeout_timer)
         {
-            
+
             m_wait_pong_timeout_timer->cancel(ec);
             m_wait_pong_timeout_timer.reset();
         }
@@ -693,7 +693,7 @@ failed:
         // m_ping_timeout_timer->expires_from_now(milliseconds(m_ping_interval + m_ping_timeout), ec);
         // m_ping_timeout_timer->async_wait(std::bind(&client_impl::timeout_ping, this, std::placeholders::_1));
     }
-    
+
     void client_impl::update_send_ping_timer() {
 
         if (m_protocol_version > ProtocolVersion3)
@@ -727,7 +727,7 @@ failed:
         m_sid.clear();
         m_packet_mgr.reset();
     }
-    
+
 #if SIO_TLS
     client_impl::context_ptr client_impl::on_tls_init(connection_hdl conn)
     {
@@ -741,7 +741,7 @@ failed:
         {
             cerr<<"Init tls failed,reason:"<< ec.message()<<endl;
         }
-        
+
         return ctx;
     }
 #endif
