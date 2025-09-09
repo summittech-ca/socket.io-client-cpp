@@ -1,3 +1,4 @@
+
 //
 //  sio_client_impl.cpp
 //  SioChatDemo
@@ -7,28 +8,31 @@
 //
 
 #include "sio_client_impl.h"
+#include <cinttypes>
 #include <functional>
 #include <sstream>
 #include <chrono>
 #include <mutex>
 #include <cmath>
+#include <stdio.h>
 // Comment this out to disable handshake logging to stdout
 
+#ifndef _SAL_TIME_H
+#define SAL_FUNC_DEBUG cout<<
+#define SAL_FUNC_VERBOSE cout<<
+#define SAL_FUNC_INFO cout<<
+#define SAL_FUNC_WARN cout<<
+#define SAL_FUNC_ERROR cout<<
+#else
 #include "SAL/Log/Log.h"
 
 namespace {
     LOGGER_NAME("socketio.client")
 }
 
-#if SIO_TLS
-// If using Asio's SSL support, you will also need to add this #include.
-// Source: http://think-async.com/Asio/asio-1.10.6/doc/asio/using.html
-// #include <asio/ssl/impl/src.hpp>
-#endif
-
-using std::chrono::milliseconds;
-
 SAL::TimerManagerPtr getTimerMgr();
+
+#endif
 
 namespace sio
 {
@@ -50,9 +54,10 @@ namespace sio
         m_client.clear_access_channels(alevel::all);
         m_client.set_access_channels(alevel::connect|alevel::disconnect|alevel::app);
 #endif
+#ifndef _SAL_TIME_H
         // Initialize the Asio transport policy
-        // m_client.init_asio();
-
+        m_client.init_asio();
+#endif
         // Bind the clients we are using
         using std::placeholders::_1;
         using std::placeholders::_2;
@@ -74,20 +79,9 @@ namespace sio
         sync_close();
     }
 
-    // void client_impl::set_proxy_basic_auth(const std::string& uri, const std::string& username, const std::string& password)
-    // {
-    //     m_proxy_base_url = uri;
-    //     m_proxy_basic_username = username;
-    //     m_proxy_basic_password = password;
-    // }
-
     void client_impl::connect(const string& uri, const map<string,string>& query, const map<string, string>& headers, const message::ptr& auth)
     {
-        if(m_reconn_timer)
-        {
-            m_reconn_timer->cancel();
-            m_reconn_timer.reset();
-        }
+        reset_timer(m_reconn_timer);
         if(m_network_thread)
         {
             if(m_con_state == con_closing||m_con_state == con_closed)
@@ -117,16 +111,17 @@ namespace sio
             query_str.append(query_str_value);
         }
         m_query_string=std::move(query_str);
-
         m_http_headers = headers;
         m_auth = auth;
 
         this->reset_states();
         m_abort_retries = false;
-        // m_client.get_io_service().dispatch(std::bind(&client_impl::connect_impl,this,uri,m_query_string));
+#ifdef _SAL_TIME_H
         this->connect_impl(uri, m_query_string);
-        // m_network_thread.reset(new thread(std::bind(&client_impl::run_loop,this)));//uri lifecycle?
-
+#else
+        m_client.get_io_service().dispatch(std::bind(&client_impl::connect_impl,this,uri,m_query_string));
+        m_network_thread.reset(new thread(std::bind(&client_impl::run_loop,this)));//uri lifecycle?
+#endif
     }
 
     socket::ptr const& client_impl::socket(string const& nsp)
@@ -213,15 +208,17 @@ namespace sio
             m_sockets.erase(it);
         }
     }
-
-    // asio::io_service& client_impl::get_io_service()
-    // {
-    //     return m_client.get_io_service();
-    // }
-
+#ifndef _SAL_TIME_H
+    asio::io_service& client_impl::get_io_service()
+    {
+		return m_client.get_io_service();
+    }
+#endif
     void client_impl::on_socket_closed(string const& nsp)
     {
         if(m_socket_close_listener)m_socket_close_listener(nsp);
+        SAL_FUNC_INFO("on_close if nsp==/");
+        if (nsp == "/") on_close(m_con);
     }
 
     void client_impl::on_socket_opened(string const& nsp)
@@ -230,14 +227,15 @@ namespace sio
     }
 
     /*************************private:*************************/
-    // void client_impl::run_loop()
-    // {
-
-    //     m_client.run();
-    //     m_client.reset();
-    //     m_client.get_alog().write(websocketpp::log::alevel::devel,
-    //                               "run loop end");
-    // }
+    void client_impl::run_loop()
+    {
+#ifndef _SAL_TIME_H
+        m_client.run();
+        m_client.reset();
+        m_client.get_alog().write(websocketpp::log::alevel::devel,
+                                   "run loop end");
+#endif
+    }
 
     void client_impl::connect_impl(const string& uri, const string& queryString)
     {
@@ -279,23 +277,6 @@ namespace sio
                 con->replace_header(header.first, header.second);
             }
 
-            // if (!m_proxy_base_url.empty()) {
-            //     con->set_proxy(m_proxy_base_url, ec);
-            //     if (ec) {
-            //         m_client.get_alog().write(websocketpp::log::alevel::app,
-            //                         "Set Proxy Error: " + ec.message());
-            //         break;
-            //     }
-            //     if (!m_proxy_basic_username.empty()) {
-            //         con->set_proxy_basic_auth(m_proxy_basic_username, m_proxy_basic_password, ec);
-            //         if (ec) {
-            //             m_client.get_alog().write(websocketpp::log::alevel::app,
-            //                         "Set Proxy Basic Auth Error: " + ec.message());
-            //             break;
-            //         }
-            //     }
-            // }
-
             m_client.connect(con);
             return;
         }
@@ -309,11 +290,7 @@ namespace sio
     void client_impl::close_impl(close::status::value const& code,string const& reason)
     {
         SAL_FUNC_INFO("Close by reason: %s", reason.c_str());
-        if(m_reconn_timer)
-        {
-            m_reconn_timer->cancel();
-            m_reconn_timer.reset();
-        }
+        reset_timer(m_reconn_timer);
         if (m_con.expired())
         {
             cerr << "Error: No active session" << endl;
@@ -322,6 +299,10 @@ namespace sio
         {
             lib::error_code ec;
             m_client.close(m_con, code, reason, ec);
+            if(ec)
+            {
+                cerr<<"close failed,reason:"<< ec.message()<<endl;
+            }
         }
     }
 
@@ -336,19 +317,31 @@ namespace sio
                 cerr<<"Send failed,reason:"<< ec.message()<<endl;
             }
         }
+        else
+        {
+            cerr<<"wrong state:"<< m_con_state <<endl;
+        }
     }
 
-    void client_impl::timeout_ping(const std::error_code &ec)
+    void client_impl::timeout_wait(const std::error_code &ec)
     {
         if(ec)
         {
             return;
         }
-        SAL_FUNC_ERROR("Ping timeout");
-        close_impl(close::status::policy_violation,"Ping timeout");
+        if (m_protocol_version == ProtocolVersion3)
+        {
+            SAL_FUNC_ERROR("Pong timeout");
+            close_impl(close::status::policy_violation,"Pong timeout");
+        }
+        else
+        {
+            SAL_FUNC_ERROR("Ping timeout");
+            close_impl(close::status::policy_violation,"Ping timeout");
+        }
     }
 
-    void client_impl::timeout_send_ping(const std::error_code &ec)
+    void client_impl::timeout_send(const std::error_code &ec)
     {
         if(ec)
         {
@@ -359,20 +352,10 @@ namespace sio
         packet p(packet::frame_ping);
         m_packet_mgr.encode(p, [&](bool /*isBin*/,shared_ptr<const string> payload)
         {
-            this->m_client.send(this->m_con, *payload, frame::opcode::text);
+            this->send_impl(payload, frame::opcode::text);
         });
 
-        update_wait_pong_timeout_timer();
-    }
-
-    void client_impl::timeout_wait_pong(const std::error_code &ec)
-    {
-        if(ec)
-        {
-            return;
-        }
-        SAL_FUNC_ERROR("Pong timeout");
-        close_impl(close::status::policy_violation,"Pong timeout");
+		update_timeout_timer();
     }
 
     void client_impl::timeout_reconnect(std::error_code const& ec)
@@ -388,7 +371,7 @@ namespace sio
             this->reset_states();
             SAL_FUNC_INFO("Reconnecting...");
             if(m_reconnecting_listener) m_reconnecting_listener();
-            // m_client.get_io_service().dispatch(std::bind(&client_impl::connect_impl,this,m_base_url,m_query_string));
+            this->connect_impl(m_base_url,m_query_string);
         }
     }
 
@@ -442,11 +425,7 @@ namespace sio
             SAL_FUNC_WARN("Reconnect for attempt: %" PRId64, (int64_t)m_reconn_made);
             unsigned delay = this->next_delay();
             if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
-            m_reconn_timer.reset(SAL::timer_cb::set_timer(delay, std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1)));
-            // m_reconn_timer.reset(new asio::steady_timer(m_client.get_io_service()));
-            // asio::error_code ec;
-            // m_reconn_timer->expires_from_now(milliseconds(delay), ec);
-            // m_reconn_timer->async_wait(std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1));
+            update_timer(m_reconn_timer, delay, &client_impl::timeout_reconnect);
         }
         else
         {
@@ -507,11 +486,7 @@ namespace sio
                 SAL_FUNC_WARN("Reconnect for attempt: %d", m_reconn_made);
                 unsigned delay = this->next_delay();
                 if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
-                m_reconn_timer.reset(SAL::timer_cb::set_timer(delay, std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1)));
-                // m_reconn_timer.reset(new asio::steady_timer(m_client.get_io_service()));
-                // asio::error_code ec;
-                // m_reconn_timer->expires_from_now(milliseconds(delay), ec);
-                // m_reconn_timer->async_wait(std::bind(&client_impl::timeout_reconnect,this, std::placeholders::_1));
+                update_timer(m_reconn_timer, delay, &client_impl::timeout_reconnect);
                 return;
             }
             reason = client::close_reason_drop;
@@ -551,8 +526,8 @@ namespace sio
             {
                 m_ping_interval = 25000;
             }
-            it = values->find("pingTimeout");
 
+            it = values->find("pingTimeout");
             if (it!=values->end()&&it->second->get_flag() == message::flag_integer) {
                 m_ping_timeout = (unsigned) static_pointer_cast<int_message>(it->second)->get_int();
             }
@@ -566,11 +541,11 @@ namespace sio
             {
                 case ProtocolVersion3:
                     // in protocol v3, the client sends a ping, and the server answers with a pong
-                    update_send_ping_timer();
+                    update_send_timer();
                     break;
                 case ProtocolVersion4: //
                     // in protocol v4, the server sends a ping, and the client answers with a pong
-                    update_ping_timeout_timer();
+                    update_timeout_timer();
                     break;
             }
 
@@ -584,15 +559,20 @@ failed:
 
     void client_impl::on_ping()
     {
+		if (m_protocol_version < ProtocolVersion4)
+        {
+            // in protocol v4, the server sends a ping, and the client answers with a pong
+            SAL_FUNC_DEBUG("Got ping");// don't return;
+        }
         // Reply with pong packet.
         packet p(packet::frame_pong);
         m_packet_mgr.encode(p, [&](bool /*isBin*/,shared_ptr<const string> payload)
         {
-            this->m_client.send(this->m_con, *payload, frame::opcode::text);
+            this->send_impl(payload, frame::opcode::text);
         });
 
         // Reset the ping timeout.
-        update_ping_timeout_timer();
+        update_timeout_timer();
     }
 
     void client_impl::on_pong()
@@ -600,14 +580,10 @@ failed:
         SAL_FUNC_DEBUG("Got pong");
 
         // Clear the waiting-for-ping timer
-        if (m_wait_pong_timeout_timer)
-        {
-            m_wait_pong_timeout_timer->cancel();
-            m_wait_pong_timeout_timer.reset();
-        }
+        reset_timer(m_timeout_timer);
 
         // Reset the ping timeout.
-        update_send_ping_timer();
+        update_send_timer();
     }
 
     void client_impl::on_decode(packet const& p)
@@ -617,7 +593,7 @@ failed:
         case packet::frame_message:
         {
             socket::ptr so_ptr = get_socket_locked(p.get_nsp());
-            if(so_ptr)so_ptr->on_message_packet(p);
+            if(so_ptr)so_ptr->on_message_packet(p);else SAL_FUNC_VERBOSE("notfound");
             break;
         }
         case packet::frame_open:
@@ -635,6 +611,7 @@ failed:
             break;
 
         default:
+			SAL_FUNC_VERBOSE("unknown");
             break;
         }
     }
@@ -650,75 +627,49 @@ failed:
     {
         SAL_FUNC_INFO("clear timers");
         std::error_code ec;
-        if(m_ping_timeout_timer)
-        {
-
-            m_ping_timeout_timer->cancel(ec);
-            m_ping_timeout_timer.reset();
-        }
-        if(m_send_ping_timer)
-        {
-
-            m_send_ping_timer->cancel(ec);
-            m_send_ping_timer.reset();
-        }
-        if(m_wait_pong_timeout_timer)
-        {
-
-            m_wait_pong_timeout_timer->cancel(ec);
-            m_wait_pong_timeout_timer.reset();
-        }
+        reset_timer(m_timeout_timer);
+        reset_timer(m_send_timer);
     }
 
-    void client_impl::update_ping_timeout_timer() {
+	void client_impl::reset_timer(TIMER &timer) {
+		if (timer)
+		{
+			timer->cancel();
+			timer.reset();
+		}
+	}
 
-        if (m_protocol_version < ProtocolVersion4)
-        {
-            // in protocol v4, the server sends a ping, and the client answers with a pong
-            return;
-        }
-        if (m_ping_timeout_timer)
-        {
-            m_ping_timeout_timer->cancel();
-            m_ping_timeout_timer.reset();
-        }
-        m_ping_timeout_timer.reset(SAL::timer_cb::set_timer(m_ping_interval + m_ping_timeout, std::bind(&client_impl::timeout_ping, this, std::placeholders::_1)));
-
-        // if (!m_ping_timeout_timer) {
-        //     m_ping_timeout_timer = std::unique_ptr<asio::steady_timer>(new asio::steady_timer(get_io_service()));
-        // }
-
-        // asio::error_code ec;
-        // m_ping_timeout_timer->expires_from_now(milliseconds(m_ping_interval + m_ping_timeout), ec);
-        // m_ping_timeout_timer->async_wait(std::bind(&client_impl::timeout_ping, this, std::placeholders::_1));
-    }
-
-    void client_impl::update_send_ping_timer() {
-
-        if (m_protocol_version > ProtocolVersion3)
-        {
+    void client_impl::update_send_timer() {
+        if (m_protocol_version > ProtocolVersion3) { // both can come here but only v3
             // in protocol v3, the client sends a ping, and the server answers with a pong
             return;
         }
-        SAL_FUNC_DEBUG("Set send_ping_timer %" PRId64, (int64_t)m_ping_interval);
-        if (m_send_ping_timer)
-        {
-            m_send_ping_timer->cancel();
-            m_send_ping_timer.reset();
-        }
-        m_send_ping_timer.reset(SAL::timer_cb::set_timer(m_ping_interval, std::bind(&client_impl::timeout_send_ping, this, std::placeholders::_1)));
+        SAL_FUNC_DEBUG("Set m_send_timer %" PRId64, (int64_t)m_ping_interval);
+		update_timer(m_send_timer, m_ping_interval, &client_impl::timeout_send );
     }
 
-    void client_impl::update_wait_pong_timeout_timer() {
-
-        SAL_FUNC_DEBUG("Set wait_pong_timeout_timer %" PRId64, (int64_t)m_ping_timeout);
-        if (m_wait_pong_timeout_timer)
-        {
-            m_wait_pong_timeout_timer->cancel();
-            m_wait_pong_timeout_timer.reset();
-        }
-        m_wait_pong_timeout_timer.reset(SAL::timer_cb::set_timer(m_ping_timeout, std::bind(&client_impl::timeout_wait_pong, this, std::placeholders::_1)));
+    void client_impl::update_timeout_timer() {// both can come here
+        int64_t _timeout = m_ping_timeout + (m_protocol_version > ProtocolVersion3 ? m_ping_interval : 0);
+        SAL_FUNC_DEBUG("Set m_timeout_timer %" PRId64, _timeout);
+        update_timer(m_timeout_timer, _timeout, &client_impl::timeout_wait);
     }
+
+	void client_impl::update_timer(TIMER &timer, int timeout, func_ptr name)
+	{
+#ifdef _SAL_TIME_H
+		reset_timer(timer);
+		timer.reset(SAL::timer_cb::set_timer(timeout, std::bind(name, this, std::placeholders::_1)));
+#else
+		if (!timer) {
+			timer = std::unique_ptr<asio::steady_timer>(new asio::steady_timer(get_io_service()));
+		}
+
+		asio::error_code ec;
+		timer->expires_from_now(std::chrono::milliseconds(timeout), ec);
+		timer->async_wait(std::bind(name, this, std::placeholders::_1));
+#endif
+
+	}
 
     void client_impl::reset_states()
     {
