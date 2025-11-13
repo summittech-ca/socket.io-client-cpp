@@ -287,7 +287,7 @@ namespace sio
         {
             packet p(packet::type_disconnect,m_nsp);
             send_packet(p);
-
+		}
             // Skip the delay by calling on_close immediately. Even though it is very aggressive, the server should be able to handle that
             // m_connection_timer.reset(SAL::timer_cb::set_timer(3000, std::bind(&socket::impl::on_close, this)));
             on_close();
@@ -299,7 +299,6 @@ namespace sio
             // asio::error_code ec;
             // m_connection_timer->expires_from_now(std::chrono::milliseconds(3000), ec);
             // m_connection_timer->async_wait(std::bind(&socket::impl::on_close, this));
-        }
     }
     
     void socket::impl::on_connected()
