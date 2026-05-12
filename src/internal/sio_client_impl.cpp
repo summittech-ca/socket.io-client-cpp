@@ -632,11 +632,16 @@ failed:
     }
 
 	void client_impl::reset_timer(TIMER &timer) {
-		if (timer)
-		{
-			timer->cancel();
-			timer.reset();
-		}
+        // Atomically take ownership of the timer pointer before operating on
+        // it. Without this, a concurrent caller (e.g. another reset_timer /
+        // update_timer on the same field, or a TimerManager callback racing
+        // with on_close's clear_timers) could pass the null check while we
+        // are mid-destroy and crash dereferencing a freed timer.
+        if (auto* t = timer.release())
+        {
+            t->cancel();
+            delete t;
+        }
 	}
 
     void client_impl::update_send_timer() {
