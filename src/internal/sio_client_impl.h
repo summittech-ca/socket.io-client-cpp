@@ -206,6 +206,7 @@ namespace sio
         typedef void (sio::client_impl::*func_ptr)(const std::error_code&) ;
         void update_timer(TIMER &timer, int timeout, func_ptr name);
         void reset_timer(TIMER &timer);
+        std::recursive_mutex m_timer_mutex;
         TIMER m_send_timer;
         TIMER m_timeout_timer;
         TIMER m_reconn_timer;
@@ -239,6 +240,7 @@ namespace sio
 
         friend class sio::client;
         friend class sio::socket;
+        
     };
 }
 #endif // SIO_CLIENT_IMPL_H

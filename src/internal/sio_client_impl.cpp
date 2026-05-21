@@ -626,17 +626,18 @@ failed:
     void client_impl::clear_timers()
     {
         SAL_FUNC_INFO("clear timers");
-        std::error_code ec;
+        std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
         reset_timer(m_timeout_timer);
         reset_timer(m_send_timer);
     }
 
 	void client_impl::reset_timer(TIMER &timer) {
-        // Atomically take ownership of the timer pointer before operating on
-        // it. Without this, a concurrent caller (e.g. another reset_timer /
-        // update_timer on the same field, or a TimerManager callback racing
-        // with on_close's clear_timers) could pass the null check while we
-        // are mid-destroy and crash dereferencing a freed timer.
+        // m_timer_mutex is recursive so callers that already hold it
+        // (clear_timers, update_timer) can re-enter this helper. Take
+        // ownership of the timer pointer before operating on it: with the lock
+        // held this can't race a concurrent reset/update on the same field, so
+        // cancel+destroy run exactly once and never on freed memory.
+        std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
         if (auto* t = timer.release())
         {
             t->cancel();
@@ -662,6 +663,7 @@ failed:
 	void client_impl::update_timer(TIMER &timer, int timeout, func_ptr name)
 	{
 #ifdef _SAL_TIME_H
+		std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
 		reset_timer(timer);
 		timer.reset(SAL::timer_cb::set_timer(timeout, std::bind(name, this, std::placeholders::_1)));
 #else
