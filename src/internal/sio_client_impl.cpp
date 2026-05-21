@@ -143,6 +143,7 @@ namespace sio
         }
 
         auto it = m_sockets.find(aux);
+		SAL_FUNC_INFO("%d", it!= m_sockets.end());
         if(it!= m_sockets.end())
         {
             return it->second;
@@ -293,7 +294,7 @@ namespace sio
         reset_timer(m_reconn_timer);
         if (m_con.expired())
         {
-            cerr << "Error: No active session" << endl;
+            SAL_FUNC_ERROR("Error: No active session");
         }
         else
         {
@@ -301,7 +302,8 @@ namespace sio
             m_client.close(m_con, code, reason, ec);
             if(ec)
             {
-                cerr<<"close failed,reason:"<< ec.message()<<endl;
+                SAL_FUNC_WARN("close failed,reason: %d / %s", (int)ec.value(), ec.message().c_str()); // linux.socket: write(): send(143) failed with error 32
+                this->on_close(m_con); // force to closed even fail to avoid timeout_connection if reuse as con_opened
             }
         }
     }
@@ -368,6 +370,7 @@ namespace sio
         {
             m_con_state = con_opening;
             m_reconn_made++;
+			this->sockets_invoke_void(&sio::socket::on_close);
             this->reset_states();
             SAL_FUNC_INFO("Reconnecting...");
             if(m_reconnecting_listener) m_reconnecting_listener();
