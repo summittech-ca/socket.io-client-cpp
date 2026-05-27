@@ -134,6 +134,13 @@ namespace sio
 
         void close_impl(close::status::value const& code,std::string const& reason);
 
+        // Forceful, synchronous teardown of the active connection used at
+        // destruction time. Unlike close_impl (a graceful close that defers
+        // transport shutdown until the close handshake completes), this calls
+        // connection::terminate() so the socket is unregistered from the socket
+        // queue and on_close fires immediately — before the endpoint is freed.
+        void force_close_impl();
+
         void send_impl(std::shared_ptr<const std::string> const&  payload_ptr,frame::opcode::value opcode);
 
         void timeout_send(const std::error_code& ec);
@@ -187,6 +194,14 @@ namespace sio
         // Connection pointer for client functions.
         connection_hdl m_con;
         client_type m_client;
+        // Strong reference to the active connection, captured at on_open.
+        // m_con (a weak connection_hdl) is reset by on_close, which
+        // runs during teardown BEFORE the forceful close — leaving us unable to
+        // reach the still-registered connection. This strong ref survives that
+        // reset so force_close_impl can always terminate/unregister it.
+        // Declared after m_client so it is destroyed first (connection before
+        // endpoint).
+        client_type::connection_ptr m_con_strong;
         // Socket.IO server settings
         std::string m_sid;
         std::string m_base_url;

@@ -25,6 +25,8 @@
 #define SAL_FUNC_ERROR cout<<
 #else
 #include "SAL/Log/Log.h"
+#include "SAL/OS/SocketQueue.h"
+#include "SAL/OS/Sync.h"
 
 namespace {
     LOGGER_NAME("socketio.client")
@@ -160,8 +162,19 @@ namespace sio
         m_con_state = con_closing;
         m_abort_retries = true;
         this->sockets_invoke_void(&sio::socket::close);
-        // m_client.get_io_service().dispatch(std::bind(&client_impl::close_impl, this,close::status::normal,"End by user"));
+#ifdef _SAL_TIME_H
+        // The websocket transport drives I/O on the socket-queue thread, so the
+        // close must run there too — otherwise it races with inbound frame
+        // handling. Post() runs inline when already on that thread (the common
+        // case here: close() is invoked from on_fail/on_open).
+        SAL_FUNC_INFO("close(): posting close_impl to socket-queue thread");
+        SAL::MSocketQueueManager::Post([this]() {
+            SAL_FUNC_INFO("close(): close_impl running on socket-queue thread");
+            this->close_impl(close::status::normal, "End by user");
+        });
+#else
         close_impl(close::status::normal,"End by user");
+#endif
     }
 
     void client_impl::sync_close()
@@ -169,8 +182,42 @@ namespace sio
         m_con_state = con_closing;
         m_abort_retries = true;
         this->sockets_invoke_void(&sio::socket::close);
-        // m_client.get_io_service().dispatch(std::bind(&client_impl::close_impl, this,close::status::normal,"End by user"));
+#ifdef _SAL_TIME_H
+        // Called from ~client_impl: the endpoint is about to be destroyed.
+        // Run close_impl on the socket-queue thread (serialized with inbound
+        // frame handling) and block until it has run, so no SocketQueueKpoll
+        // callback can touch this connection after we return. Run inline if we
+        // are already on that thread, to avoid self-deadlock.
+        if (SAL::MSocketQueueManager::IsOnQueueThread())
+        {
+            SAL_FUNC_INFO("sync_close: force-terminating inline (already on socket-queue thread)");
+            force_close_impl();
+            SAL_FUNC_INFO("sync_close: close completed (inline)");
+        }
+        else
+        {
+            SAL_FUNC_INFO("sync_close: dispatching force-close to socket-queue thread and waiting");
+            SAL::Event done(false);
+            SAL::MSocketQueueManager::Post([this, &done]() {
+                SAL_FUNC_INFO("sync_close: force_close_impl running on socket-queue thread");
+                this->force_close_impl();
+                done.signal();
+            });
+            // Bounded wait. A live loop runs the task within its 1s heartbeat;
+            // the timeout only guards against a wedged/dead loop so teardown
+            // can't block forever.
+            if (!done.wait(5000))
+            {
+                SAL_FUNC_ERROR("sync_close: timed out waiting for socket-queue close");
+            }
+            else
+            {
+                SAL_FUNC_INFO("sync_close: close completed on socket-queue thread");
+            }
+        }
+#else
         close_impl(close::status::normal,"End by user");
+#endif
         if(m_network_thread)
         {
             m_network_thread->join();
@@ -306,6 +353,43 @@ namespace sio
                 this->on_close(m_con); // force to closed even fail to avoid timeout_connection if reuse as con_opened
             }
         }
+    }
+
+    void client_impl::force_close_impl()
+    {
+        // Must run on the socket-queue thread (see sync_close). A graceful
+        // close (close_impl → m_client.close) only sends the close
+        // frame and waits for the peer's reply before the transport is shut
+        // down — that shutdown (which UNREGISTERS the socket from the socket
+        // queue) would otherwise happen AFTER ~client_impl, leaving the
+        // websocketpp connection alive in the loop with handlers bound to a
+        // freed client_impl → use-after-free in on_close.
+        //
+        // connection::terminate() forces it now: async_shutdown unregisters the
+        // socket synchronously, then handle_terminate fires on_close — all
+        // while client_impl is still alive. terminate() is idempotent.
+        reset_timer(m_reconn_timer);
+
+        // Prefer the strong ref (survives on_close's m_con.reset()). Fall back
+        // to the weak hdl if it is still valid.
+        client_type::connection_ptr con = m_con_strong;
+        if (!con && !m_con.expired())
+        {
+            lib::error_code ec;
+            con = m_client.get_con_from_hdl(m_con, ec);
+            if (ec) con.reset();
+        }
+
+        if (con)
+        {
+            SAL_FUNC_INFO("force_close_impl: terminating connection");
+            con->terminate(lib::error_code());
+        }
+        else
+        {
+            SAL_FUNC_INFO("force_close_impl: no active connection");
+        }
+        m_con_strong.reset();
     }
 
     void client_impl::send_impl(shared_ptr<const string> const& payload_ptr,frame::opcode::value opcode)
@@ -447,6 +531,12 @@ namespace sio
         SAL_FUNC_INFO("Connected.");
         m_con_state = con_opened;
         m_con = con;
+        {
+            // Keep a strong ref so teardown can always reach the connection
+            // even after on_close resets the weak m_con.
+            lib::error_code __ec;
+            m_con_strong = m_client.get_con_from_hdl(con, __ec);
+        }
         m_reconn_made = 0;
         this->sockets_invoke_void(&sio::socket::on_open);
         this->socket("");
