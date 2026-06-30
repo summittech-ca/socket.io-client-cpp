@@ -202,6 +202,11 @@ namespace sio
         // Declared after m_client so it is destroyed first (connection before
         // endpoint).
         client_type::connection_ptr m_con_strong;
+        // Guards m_con_strong: it is now captured in connect_impl (app thread,
+        // under _SAL_TIME_H) and also written in on_open and read/reset in
+        // force_close_impl (socket-queue thread), so the shared_ptr swap must be
+        // serialized (ON-1531).
+        std::mutex m_con_strong_mutex;
         // Socket.IO server settings
         std::string m_sid;
         std::string m_base_url;

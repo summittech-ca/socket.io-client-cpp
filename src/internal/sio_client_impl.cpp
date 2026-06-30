@@ -325,6 +325,20 @@ namespace sio
                 con->replace_header(header.first, header.second);
             }
 
+            // Capture the connection NOW, before connect() registers its socket
+            // with the socket-queue loop. on_open (where m_con_strong used to be
+            // set) only fires once the handshake completes, so a client_impl torn
+            // down during the connecting/handshaking window would leave this
+            // socket registered with a handler bound to the freed client_impl —
+            // a later inbound frame then lands in put_payload on freed memory
+            // (ON-1531 reopen). Holding the strong ref here lets force_close_impl
+            // always reach this connection and terminate() it (→ async_shutdown →
+            // UnregisterHandler) before the object is freed.
+            {
+                std::lock_guard<std::mutex> lk(m_con_strong_mutex);
+                m_con_strong = con;
+            }
+
             m_client.connect(con);
             return;
         }
@@ -370,9 +384,16 @@ namespace sio
         // while client_impl is still alive. terminate() is idempotent.
         reset_timer(m_reconn_timer);
 
-        // Prefer the strong ref (survives on_close's m_con.reset()). Fall back
-        // to the weak hdl if it is still valid.
-        client_type::connection_ptr con = m_con_strong;
+        // Prefer the strong ref (captured in connect_impl, survives on_close's
+        // m_con.reset()). Take and clear it under the lock, then drop the lock
+        // before terminate() — terminate can fire on_close synchronously and we
+        // must not hold the lock across that callback. Fall back to the weak hdl.
+        client_type::connection_ptr con;
+        {
+            std::lock_guard<std::mutex> lk(m_con_strong_mutex);
+            con = m_con_strong;
+            m_con_strong.reset();
+        }
         if (!con && !m_con.expired())
         {
             lib::error_code ec;
@@ -389,7 +410,6 @@ namespace sio
         {
             SAL_FUNC_INFO("force_close_impl: no active connection");
         }
-        m_con_strong.reset();
     }
 
     void client_impl::send_impl(shared_ptr<const string> const& payload_ptr,frame::opcode::value opcode)
@@ -532,10 +552,13 @@ namespace sio
         m_con_state = con_opened;
         m_con = con;
         {
-            // Keep a strong ref so teardown can always reach the connection
-            // even after on_close resets the weak m_con.
+            // Refresh the strong ref from the now-open handle (connect_impl
+            // already captured it before the socket was registered). Same lock
+            // as connect_impl/force_close_impl — see m_con_strong_mutex (ON-1531).
             lib::error_code __ec;
-            m_con_strong = m_client.get_con_from_hdl(con, __ec);
+            client_type::connection_ptr strong = m_client.get_con_from_hdl(con, __ec);
+            std::lock_guard<std::mutex> lk(m_con_strong_mutex);
+            m_con_strong = strong;
         }
         m_reconn_made = 0;
         this->sockets_invoke_void(&sio::socket::on_open);
