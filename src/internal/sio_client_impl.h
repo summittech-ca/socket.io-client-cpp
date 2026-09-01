@@ -18,6 +18,7 @@
 typedef websocketpp::config::summit_tls_client client_config;
 
 #include <atomic>
+#include <ctime>
 #include <memory>
 #include <map>
 #include <thread>
@@ -248,6 +249,8 @@ namespace sio
         unsigned m_reconn_attempts;
 
         unsigned m_reconn_made;
+
+        std::time_t m_reconn_made_time;
 
         ProtocolVersion m_protocol_version;
 
