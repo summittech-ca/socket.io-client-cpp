@@ -454,6 +454,7 @@ namespace sio
         {
             m_con_state = con_opening;
             m_reconn_made++;
+			m_reconn_made_time = time(0);
 			this->sockets_invoke_void(&sio::socket::on_close);
             this->reset_states();
             SAL_FUNC_INFO("Reconnecting...");
@@ -686,6 +687,11 @@ failed:
         case packet::frame_message:
         {
             socket::ptr so_ptr = get_socket_locked(p.get_nsp());
+			if (p.get_type() == packet::type_disconnect && std::difftime(std::time(0), m_reconn_made_time) < 10)
+            {
+              SAL_FUNC_DEBUG("inc m_reconn_made");
+              ++ m_reconn_made;
+            }
             if(so_ptr)so_ptr->on_message_packet(p);else SAL_FUNC_VERBOSE("notfound");
             break;
         }
