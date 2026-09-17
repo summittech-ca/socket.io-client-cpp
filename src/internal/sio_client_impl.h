@@ -92,7 +92,7 @@ namespace sio
         void connect(const std::string& uri, const std::map<std::string, std::string>& queryString,
                      const std::map<std::string, std::string>& httpExtraHeaders, const message::ptr& auth);
 
-        sio::socket::ptr const& socket(const std::string& nsp);
+        sio::socket::ptr socket(const std::string& nsp);
 
         // Closes the connection
         void close();
