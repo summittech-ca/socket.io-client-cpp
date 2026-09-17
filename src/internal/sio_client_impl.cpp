@@ -126,9 +126,8 @@ namespace sio
 #endif
     }
 
-    socket::ptr const& client_impl::socket(string const& nsp)
+    socket::ptr client_impl::socket(string const& nsp)
     {
-        lock_guard<mutex> guard(m_socket_mutex);
         string aux;
         if(nsp == "")
         {
@@ -144,17 +143,40 @@ namespace sio
             aux = nsp;
         }
 
+        {
+            lock_guard<mutex> guard(m_socket_mutex);
+            auto it = m_sockets.find(aux);
+            SAL_FUNC_INFO("%d", it!= m_sockets.end());
+            if(it!= m_sockets.end())
+            {
+                return it->second;
+            }
+        }
+
+        // Constructed with m_socket_mutex released. The sio::socket constructor calls
+        // send_connect(), whose write can fail synchronously (ECONNABORTED on a half-dead
+        // connection) and re-enter client_impl::on_close() on this very thread. on_close()
+        // takes m_socket_mutex via sockets_invoke_void(), so building this under the lock
+        // deadlocks the non-recursive mutex against itself and wedges the client forever.
+        socket::ptr s(new sio::socket(this,aux,m_auth));
+
+        // Publish only a socket whose CONNECT actually went out. A cached socket is handed
+        // straight back on every later call and never re-sends (socket::impl::on_open()
+        // deliberately does not send_connect), so caching a failed one would poison the
+        // namespace until remove_socket(). Leaving it out means the next call reconstructs
+        // and retries, which is what the reconnect path relies on.
+        if(!opened())
+        {
+            return s;
+        }
+
+        lock_guard<mutex> guard(m_socket_mutex);
         auto it = m_sockets.find(aux);
-		SAL_FUNC_INFO("%d", it!= m_sockets.end());
         if(it!= m_sockets.end())
         {
             return it->second;
         }
-        else
-        {
-            pair<const string, socket::ptr> p(aux,shared_ptr<sio::socket>(new sio::socket(this,aux,m_auth)));
-            return (m_sockets.insert(p).first)->second;
-        }
+        return m_sockets.insert(pair<const string, socket::ptr>(aux,s)).first->second;
     }
 
     void client_impl::close()

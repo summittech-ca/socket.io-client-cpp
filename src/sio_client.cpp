@@ -104,7 +104,7 @@ namespace sio
         m_impl->connect(uri, query, http_extra_headers, auth);
     }
     
-    socket::ptr const& client::socket(const std::string& nsp)
+    socket::ptr client::socket(const std::string& nsp)
     {
         return m_impl->socket(nsp);
     }

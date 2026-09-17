@@ -85,7 +85,7 @@ namespace sio
 
         void set_logs_verbose();
 
-        sio::socket::ptr const& socket(const std::string& nsp = "");
+        sio::socket::ptr socket(const std::string& nsp = "");
         
         // Closes the connection
         void close();
