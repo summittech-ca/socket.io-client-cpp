@@ -347,6 +347,11 @@ namespace sio
                 con->replace_header(header.first, header.second);
             }
 
+            // Hold the connection while it is still resolving / connecting, not
+            // only from on_open: if the client is destroyed before the connect
+            // completes, force_close_impl must be able to terminate it, or the
+            // pending DNS result / TCP connect later lands on the freed endpoint.
+            m_con_strong = con;
             m_client.connect(con);
             return;
         }
@@ -398,8 +403,9 @@ namespace sio
         reset_timer(m_reconn_timer);
         clear_timers();
 
-        // Prefer the strong ref (survives on_close's m_con.reset()). Fall back
-        // to the weak hdl if it is still valid.
+        // Prefer the strong ref (survives on_close's m_con.reset(), and is set
+        // from connect_impl so it also covers a connect still in flight).
+        // Fall back to the weak hdl if it is still valid.
         client_type::connection_ptr con = m_con_strong;
         if (!con && !m_con.expired())
         {
