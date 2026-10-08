@@ -126,9 +126,8 @@ namespace sio
 #endif
     }
 
-    socket::ptr const& client_impl::socket(string const& nsp)
+    socket::ptr client_impl::socket(string const& nsp)
     {
-        lock_guard<mutex> guard(m_socket_mutex);
         string aux;
         if(nsp == "")
         {
@@ -144,17 +143,40 @@ namespace sio
             aux = nsp;
         }
 
+        {
+            lock_guard<mutex> guard(m_socket_mutex);
+            auto it = m_sockets.find(aux);
+            SAL_FUNC_INFO("%d", it!= m_sockets.end());
+            if(it!= m_sockets.end())
+            {
+                return it->second;
+            }
+        }
+
+        // Constructed with m_socket_mutex released. The sio::socket constructor calls
+        // send_connect(), whose write can fail synchronously (ECONNABORTED on a half-dead
+        // connection) and re-enter client_impl::on_close() on this very thread. on_close()
+        // takes m_socket_mutex via sockets_invoke_void(), so building this under the lock
+        // deadlocks the non-recursive mutex against itself and wedges the client forever.
+        socket::ptr s(new sio::socket(this,aux,m_auth));
+
+        // Publish only a socket whose CONNECT actually went out. A cached socket is handed
+        // straight back on every later call and never re-sends (socket::impl::on_open()
+        // deliberately does not send_connect), so caching a failed one would poison the
+        // namespace until remove_socket(). Leaving it out means the next call reconstructs
+        // and retries, which is what the reconnect path relies on.
+        if(!opened())
+        {
+            return s;
+        }
+
+        lock_guard<mutex> guard(m_socket_mutex);
         auto it = m_sockets.find(aux);
-		SAL_FUNC_INFO("%d", it!= m_sockets.end());
         if(it!= m_sockets.end())
         {
             return it->second;
         }
-        else
-        {
-            pair<const string, socket::ptr> p(aux,shared_ptr<sio::socket>(new sio::socket(this,aux,m_auth)));
-            return (m_sockets.insert(p).first)->second;
-        }
+        return m_sockets.insert(pair<const string, socket::ptr>(aux,s)).first->second;
     }
 
     void client_impl::close()
@@ -382,7 +404,13 @@ namespace sio
         // connection::terminate() forces it now: async_shutdown unregisters the
         // socket synchronously, then handle_terminate fires on_close — all
         // while client_impl is still alive. terminate() is idempotent.
+        //
+        // Cancel every timer here, on the socket-queue thread: timer expiries
+        // are posted to this thread bound to `this`, and a cancelled timer's
+        // pending expiry drops itself. on_close only clears the ping timers,
+        // and only when there is a connection to terminate.
         reset_timer(m_reconn_timer);
+        clear_timers();
 
         // Prefer the strong ref (captured in connect_impl, survives on_close's
         // m_con.reset()). Take and clear it under the lock, then drop the lock
@@ -474,6 +502,7 @@ namespace sio
         {
             m_con_state = con_opening;
             m_reconn_made++;
+			m_reconn_made_time = time(0);
 			this->sockets_invoke_void(&sio::socket::on_close);
             this->reset_states();
             SAL_FUNC_INFO("Reconnecting...");
@@ -709,6 +738,11 @@ failed:
         case packet::frame_message:
         {
             socket::ptr so_ptr = get_socket_locked(p.get_nsp());
+			if (p.get_type() == packet::type_disconnect && std::difftime(std::time(0), m_reconn_made_time) < 10)
+            {
+              SAL_FUNC_DEBUG("inc m_reconn_made");
+              ++ m_reconn_made;
+            }
             if(so_ptr)so_ptr->on_message_packet(p);else SAL_FUNC_VERBOSE("notfound");
             break;
         }
@@ -749,16 +783,12 @@ failed:
 
 	void client_impl::reset_timer(TIMER &timer) {
         // m_timer_mutex is recursive so callers that already hold it
-        // (clear_timers, update_timer) can re-enter this helper. Take
-        // ownership of the timer pointer before operating on it: with the lock
-        // held this can't race a concurrent reset/update on the same field, so
-        // cancel+destroy run exactly once and never on freed memory.
+        // (clear_timers, update_timer) can re-enter this helper. With the lock
+        // held this can't race a concurrent reset/update on the same field.
+        // The handle cancels the timer and drops our ref; the token itself is
+        // freed only once TimerManager is done with it (see timer_cb).
         std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
-        if (auto* t = timer.release())
-        {
-            t->cancel();
-            delete t;
-        }
+        timer.reset();
 	}
 
     void client_impl::update_send_timer() {

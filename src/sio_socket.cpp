@@ -180,7 +180,7 @@ namespace sio
         
         error_listener m_error_listener;
         
-        std::unique_ptr<SAL::timer> m_connection_timer;
+        SAL::timer_handle m_connection_timer;
         
         std::queue<packet> m_packet_queue;
         

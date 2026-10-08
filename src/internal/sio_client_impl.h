@@ -18,6 +18,7 @@
 typedef websocketpp::config::summit_tls_client client_config;
 
 #include <atomic>
+#include <ctime>
 #include <memory>
 #include <map>
 #include <thread>
@@ -30,7 +31,7 @@ namespace sio
 
     typedef websocketpp::client<client_config> client_type;
 #ifdef _SAL_TIME_H
-    typedef std::unique_ptr<SAL::timer> TIMER;
+    typedef SAL::timer_handle TIMER;
 #else
     typedef std::unique_ptr<asio::steady_timer> TIMER;
 #endif
@@ -91,7 +92,7 @@ namespace sio
         void connect(const std::string& uri, const std::map<std::string, std::string>& queryString,
                      const std::map<std::string, std::string>& httpExtraHeaders, const message::ptr& auth);
 
-        sio::socket::ptr const& socket(const std::string& nsp);
+        sio::socket::ptr socket(const std::string& nsp);
 
         // Closes the connection
         void close();
@@ -253,6 +254,8 @@ namespace sio
         unsigned m_reconn_attempts;
 
         unsigned m_reconn_made;
+
+        std::time_t m_reconn_made_time;
 
         ProtocolVersion m_protocol_version;
 
