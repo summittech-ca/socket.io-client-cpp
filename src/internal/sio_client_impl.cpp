@@ -347,6 +347,11 @@ namespace sio
                 con->replace_header(header.first, header.second);
             }
 
+            // Hold the connection while it is still resolving / connecting, not
+            // only from on_open: if the client is destroyed before the connect
+            // completes, force_close_impl must be able to terminate it, or the
+            // pending DNS result / TCP connect later lands on the freed endpoint.
+            m_con_strong = con;
             m_client.connect(con);
             return;
         }
@@ -390,10 +395,17 @@ namespace sio
         // connection::terminate() forces it now: async_shutdown unregisters the
         // socket synchronously, then handle_terminate fires on_close — all
         // while client_impl is still alive. terminate() is idempotent.
+        //
+        // Cancel every timer here, on the socket-queue thread: timer expiries
+        // are posted to this thread bound to `this`, and a cancelled timer's
+        // pending expiry drops itself. on_close only clears the ping timers,
+        // and only when there is a connection to terminate.
         reset_timer(m_reconn_timer);
+        clear_timers();
 
-        // Prefer the strong ref (survives on_close's m_con.reset()). Fall back
-        // to the weak hdl if it is still valid.
+        // Prefer the strong ref (survives on_close's m_con.reset(), and is set
+        // from connect_impl so it also covers a connect still in flight).
+        // Fall back to the weak hdl if it is still valid.
         client_type::connection_ptr con = m_con_strong;
         if (!con && !m_con.expired())
         {
@@ -754,16 +766,12 @@ failed:
 
 	void client_impl::reset_timer(TIMER &timer) {
         // m_timer_mutex is recursive so callers that already hold it
-        // (clear_timers, update_timer) can re-enter this helper. Take
-        // ownership of the timer pointer before operating on it: with the lock
-        // held this can't race a concurrent reset/update on the same field, so
-        // cancel+destroy run exactly once and never on freed memory.
+        // (clear_timers, update_timer) can re-enter this helper. With the lock
+        // held this can't race a concurrent reset/update on the same field.
+        // The handle cancels the timer and drops our ref; the token itself is
+        // freed only once TimerManager is done with it (see timer_cb).
         std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
-        if (auto* t = timer.release())
-        {
-            t->cancel();
-            delete t;
-        }
+        timer.reset();
 	}
 
     void client_impl::update_send_timer() {

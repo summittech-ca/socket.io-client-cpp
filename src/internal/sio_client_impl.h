@@ -31,7 +31,7 @@ namespace sio
 
     typedef websocketpp::client<client_config> client_type;
 #ifdef _SAL_TIME_H
-    typedef std::unique_ptr<SAL::timer> TIMER;
+    typedef SAL::timer_handle TIMER;
 #else
     typedef std::unique_ptr<asio::steady_timer> TIMER;
 #endif
