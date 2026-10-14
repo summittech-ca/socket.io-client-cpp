@@ -116,6 +116,12 @@ namespace sio
         m_http_headers = headers;
         m_auth = auth;
 
+        // On _SAL_TIME_H builds m_network_thread is never set, so the "already connected"
+        // early return above never runs and a connect() during a live or still-closing
+        // connection used to open a second websocket beside it. Both then fed the one packet
+        // manager and namespace map, so the router's kick of the older one closed the
+        // namespace sockets of the newer one.
+        this->retire_current_connection();
         this->reset_states();
         m_abort_retries = false;
 #ifdef _SAL_TIME_H
@@ -181,6 +187,9 @@ namespace sio
 
     void client_impl::close()
     {
+        // Captured before the namespace sockets close: closing "/" re-enters on_close,
+        // which resets m_con.
+        connection_hdl target = m_con;
         m_con_state = con_closing;
         m_abort_retries = true;
         this->sockets_invoke_void(&sio::socket::close);
@@ -190,12 +199,12 @@ namespace sio
         // handling. Post() runs inline when already on that thread (the common
         // case here: close() is invoked from on_fail/on_open).
         SAL_FUNC_INFO("close(): posting close_impl to socket-queue thread");
-        SAL::MSocketQueueManager::Post([this]() {
+        SAL::MSocketQueueManager::Post([this, target]() {
             SAL_FUNC_INFO("close(): close_impl running on socket-queue thread");
-            this->close_impl(close::status::normal, "End by user");
+            this->close_impl(target, close::status::normal, "End by user");
         });
 #else
-        close_impl(close::status::normal,"End by user");
+        close_impl(target, close::status::normal,"End by user");
 #endif
     }
 
@@ -288,7 +297,9 @@ namespace sio
     {
         if(m_socket_close_listener)m_socket_close_listener(nsp);
         SAL_FUNC_INFO("on_close if nsp==/");
-        if (nsp == "/") on_close(m_con);
+        // m_con is already empty when "/" closes as part of a reconnect or after the
+        // connection itself closed; there is nothing left to close then.
+        if (nsp == "/" && !m_con.expired()) on_close(m_con);
     }
 
     void client_impl::on_socket_opened(string const& nsp)
@@ -359,6 +370,7 @@ namespace sio
             {
                 std::lock_guard<std::mutex> lk(m_con_strong_mutex);
                 m_con_strong = con;
+                m_current_con = con;
             }
 
             m_client.connect(con);
@@ -373,22 +385,79 @@ namespace sio
 
     void client_impl::close_impl(close::status::value const& code,string const& reason)
     {
+        close_impl(m_con, code, reason);
+    }
+
+    void client_impl::close_impl(connection_hdl con, close::status::value const& code, string const& reason)
+    {
         SAL_FUNC_INFO("Close by reason: %s", reason.c_str());
         reset_timer(m_reconn_timer);
-        if (m_con.expired())
+        if (con.expired())
         {
             SAL_FUNC_ERROR("Error: No active session");
         }
         else
         {
             lib::error_code ec;
-            m_client.close(m_con, code, reason, ec);
+            m_client.close(con, code, reason, ec);
             if(ec)
             {
                 SAL_FUNC_WARN("close failed,reason: %d / %s", (int)ec.value(), ec.message().c_str()); // linux.socket: write(): send(143) failed with error 32
-                this->on_close(m_con); // force to closed even fail to avoid timeout_connection if reuse as con_opened
+                this->on_close(con); // force to closed even fail to avoid timeout_connection if reuse as con_opened
             }
         }
+    }
+
+    void client_impl::retire_current_connection()
+    {
+        client_type::connection_ptr old;
+        {
+            std::lock_guard<std::mutex> lk(m_con_strong_mutex);
+            old = m_con_strong;
+            m_con_strong.reset();
+            m_current_con.reset();
+        }
+        m_con.reset();
+        if (!old)
+        {
+            return;
+        }
+
+        // terminate(), not a graceful close: a graceful close only sends the close frame and
+        // keeps the socket open and readable until the server answers, which it may not do
+        // for a minute. Every callback it fires from here on is ignored by is_current().
+        SAL_FUNC_INFO("retiring previous connection [@%p]", old.get());
+#ifdef _SAL_TIME_H
+        if (SAL::MSocketQueueManager::IsOnQueueThread())
+        {
+            old->terminate(lib::error_code());
+        }
+        else
+        {
+            // Shared so a wait that times out leaves nothing dangling for the task.
+            std::shared_ptr<SAL::Event> done = std::make_shared<SAL::Event>(false);
+            SAL::MSocketQueueManager::Post([old, done]() {
+                old->terminate(lib::error_code());
+                done->signal();
+            });
+            if (!done->wait(5000))
+            {
+                SAL_FUNC_ERROR("retire_current_connection: timed out waiting for socket-queue terminate");
+            }
+        }
+#else
+        old->terminate(lib::error_code());
+#endif
+    }
+
+    bool client_impl::is_current(connection_hdl const& con)
+    {
+        if (con.expired())
+        {
+            return false;
+        }
+        std::lock_guard<std::mutex> lk(m_con_strong_mutex);
+        return !con.owner_before(m_current_con) && !m_current_con.owner_before(con);
     }
 
     void client_impl::force_close_impl()
@@ -504,6 +573,7 @@ namespace sio
             m_reconn_made++;
 			m_reconn_made_time = time(0);
 			this->sockets_invoke_void(&sio::socket::on_close);
+            this->retire_current_connection();
             this->reset_states();
             SAL_FUNC_INFO("Reconnecting...");
             if(m_reconnecting_listener) m_reconnecting_listener();
@@ -544,8 +614,12 @@ namespace sio
         }
     }
 
-    void client_impl::on_fail(connection_hdl)
+    void client_impl::on_fail(connection_hdl con)
     {
+        if (!is_current(con)) {
+            SAL_FUNC_INFO("Ignoring failure of a retired connection.");
+            return;
+        }
         if (m_con_state == con_closing) {
             SAL_FUNC_WARN("Connection failed while closing.");
             this->close();
@@ -571,6 +645,10 @@ namespace sio
 
     void client_impl::on_open(connection_hdl con)
     {
+        if (!is_current(con)) {
+            SAL_FUNC_WARN("Ignoring open of a retired connection.");
+            return;
+        }
         if (m_con_state == con_closing) {
             SAL_FUNC_WARN("Connection opened while closing.");
             this->close();
@@ -597,6 +675,12 @@ namespace sio
 
     void client_impl::on_close(connection_hdl con)
     {
+        // A retired connection closing late must not tear down the state, timers and
+        // namespace sockets of the connection that replaced it.
+        if (!is_current(con)) {
+            SAL_FUNC_INFO("Ignoring close of a retired connection.");
+            return;
+        }
         SAL_FUNC_INFO("Client Disconnected.");
         con_state m_con_state_was = m_con_state;
         m_con_state = con_closed;
@@ -643,8 +727,15 @@ namespace sio
         }
     }
 
-    void client_impl::on_message(connection_hdl, client_type::message_ptr msg)
+    void client_impl::on_message(connection_hdl con, client_type::message_ptr msg)
     {
+        // The packet manager and namespace map are shared, so a frame from a retired
+        // connection (e.g. the router kicking its namespace socket) would act on the
+        // current connection's namespaces.
+        if (!is_current(con)) {
+            SAL_FUNC_WARN("Dropping a frame from a retired connection.");
+            return;
+        }
         // Parse the incoming message according to socket.IO rules
         m_packet_mgr.put_payload(msg->get_payload());
     }

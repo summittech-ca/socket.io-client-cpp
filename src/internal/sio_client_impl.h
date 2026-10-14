@@ -135,6 +135,18 @@ namespace sio
 
         void close_impl(close::status::value const& code,std::string const& reason);
 
+        // Gracefully closes `con` only, so a close posted before a reconnect can never
+        // land on the connection that replaced it.
+        void close_impl(connection_hdl con, close::status::value const& code, std::string const& reason);
+
+        // Force-terminates the connection this client currently drives, if any, and forgets
+        // it, so the next connect_impl is the only websocket on the wire.
+        void retire_current_connection();
+
+        // True when `con` is the connection this client currently drives. Callbacks from any
+        // other connection come from one that was already retired and must be ignored.
+        bool is_current(connection_hdl const& con);
+
         // Forceful, synchronous teardown of the active connection used at
         // destruction time. Unlike close_impl (a graceful close that defers
         // transport shutdown until the close handshake completes), this calls
@@ -208,6 +220,11 @@ namespace sio
         // force_close_impl (socket-queue thread), so the shared_ptr swap must be
         // serialized (ON-1531).
         std::mutex m_con_strong_mutex;
+        // The connection this client currently drives, from connect_impl until the next one
+        // replaces it. Unlike m_con it survives on_close, and unlike m_con_strong it
+        // survives force_close_impl, so the teardown close is still recognised as ours.
+        // Guarded by m_con_strong_mutex.
+        connection_hdl m_current_con;
         // Socket.IO server settings
         std::string m_sid;
         std::string m_base_url;
