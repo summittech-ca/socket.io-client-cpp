@@ -77,7 +77,6 @@ namespace sio
 
     client_impl::~client_impl()
     {
-        m_alive.reset();
         this->sockets_invoke_void(&sio::socket::on_close);
         sync_close();
     }
@@ -409,9 +408,6 @@ namespace sio
             return;
         }
         reset_timer(m_reconn_timer);
-        // Bounds a close the server never answers. Armed before m_client.close: a close
-        // that completes synchronously runs on_close, which clears it.
-        update_timer(m_close_timer, m_ping_timeout, &client_impl::timeout_close);
         lib::error_code ec;
         m_client.close(con, code, reason, ec);
         if(ec)
@@ -431,9 +427,6 @@ namespace sio
             m_current_con.reset();
         }
         m_con.reset();
-        // The terminate below replaces the pending close; left armed it would fire
-        // against the connection that replaces this one.
-        reset_timer(m_close_timer);
         if (!old)
         {
             return;
@@ -550,7 +543,7 @@ namespace sio
         }
         // Outside con_opened there is nothing to time out: between reconnect attempts a
         // close here would only cancel the pending reconnect, and a closing connection
-        // is covered by m_close_timer.
+        // is bounded by websocketpp's close-handshake timeout.
         if (m_con_state != con_opened)
         {
             SAL_FUNC_INFO("Ignoring ping/pong timeout, connection not open (state %d)", (int)m_con_state.load());
@@ -566,30 +559,6 @@ namespace sio
             SAL_FUNC_ERROR("Ping timeout");
             close_impl(close::status::policy_violation,"Ping timeout");
         }
-    }
-
-    void client_impl::timeout_close(const std::error_code &ec)
-    {
-        if(ec)
-        {
-            return;
-        }
-        if (m_con_state == con_closed)
-        {
-            return;
-        }
-        SAL_FUNC_WARN("Close not acknowledged after %u ms, terminating connection", m_ping_timeout);
-#ifdef _SAL_TIME_H
-        // force_close_impl must run on the socket-queue thread (see sync_close). A posted
-        // task cannot be cancelled, and the client may be destroyed before it runs.
-        std::weak_ptr<void> alive = m_alive;
-        SAL::MSocketQueueManager::Post([this, alive]() {
-            if (alive.expired()) return;
-            this->force_close_impl();
-        });
-#else
-        force_close_impl();
-#endif
     }
 
     void client_impl::timeout_send(const std::error_code &ec)
@@ -735,8 +704,7 @@ namespace sio
         SAL_FUNC_INFO("Client Disconnected.");
         con_state m_con_state_was;
         {
-            // Same lock as update_send_timer/update_timeout_timer, so no thread can pass
-            // their open-state check and arm a timer after this has cleared them.
+            // See ping_timers_allowed.
             std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
             m_con_state_was = m_con_state.exchange(con_closed);
             this->clear_timers();
@@ -926,7 +894,6 @@ failed:
         std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
         reset_timer(m_timeout_timer);
         reset_timer(m_send_timer);
-        reset_timer(m_close_timer);
     }
 
 	void client_impl::reset_timer(TIMER &timer) {

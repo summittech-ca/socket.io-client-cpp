@@ -160,8 +160,6 @@ namespace sio
 
         void timeout_wait(const std::error_code& ec);
 
-        void timeout_close(const std::error_code& ec);
-
         void timeout_reconnect(std::error_code const& ec);
 
         unsigned next_delay() const;
@@ -252,13 +250,8 @@ namespace sio
         TIMER m_send_timer;
         TIMER m_timeout_timer;
         TIMER m_reconn_timer;
-        TIMER m_close_timer;
 
         std::atomic<con_state> m_con_state;
-
-        // Reset first thing in ~client_impl; tasks posted to the socket queue hold a weak ref
-        // and skip their work once it has expired.
-        std::shared_ptr<void> m_alive = std::make_shared<int>(0);
 
         client::con_listener m_open_listener;
         client::con_listener m_fail_listener;
