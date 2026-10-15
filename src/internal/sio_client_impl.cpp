@@ -391,20 +391,29 @@ namespace sio
     void client_impl::close_impl(connection_hdl con, close::status::value const& code, string const& reason)
     {
         SAL_FUNC_INFO("Close by reason: %s", reason.c_str());
-        reset_timer(m_reconn_timer);
         if (con.expired())
         {
             SAL_FUNC_ERROR("Error: No active session");
-        }
-        else
-        {
-            lib::error_code ec;
-            m_client.close(con, code, reason, ec);
-            if(ec)
+            // Between reconnect attempts there is no session, and the pending
+            // m_reconn_timer is the only thing that will ever bring one back. Only a
+            // user close (m_abort_retries) may cancel it; an internal close landing
+            // here would leave the client closed for good.
+            if (m_abort_retries)
             {
-                SAL_FUNC_WARN("close failed,reason: %d / %s", (int)ec.value(), ec.message().c_str()); // linux.socket: write(): send(143) failed with error 32
-                this->on_close(con); // force to closed even fail to avoid timeout_connection if reuse as con_opened
+                // A reconnect may still be opening (m_con is only set in on_open):
+                // terminate it, or it stays open and keeps dispatching events after
+                // the close. Cancels m_reconn_timer too.
+                force_close_impl();
             }
+            return;
+        }
+        reset_timer(m_reconn_timer);
+        lib::error_code ec;
+        m_client.close(con, code, reason, ec);
+        if(ec)
+        {
+            SAL_FUNC_WARN("close failed,reason: %d / %s", (int)ec.value(), ec.message().c_str()); // linux.socket: write(): send(143) failed with error 32
+            this->on_close(con); // force to closed even fail to avoid timeout_connection if reuse as con_opened
         }
     }
 
@@ -532,6 +541,14 @@ namespace sio
         {
             return;
         }
+        // Outside con_opened there is nothing to time out: between reconnect attempts a
+        // close here would only cancel the pending reconnect, and a closing connection
+        // is bounded by websocketpp's close-handshake timeout.
+        if (m_con_state != con_opened)
+        {
+            SAL_FUNC_INFO("Ignoring ping/pong timeout, connection not open (state %d)", (int)m_con_state.load());
+            return;
+        }
         if (m_protocol_version == ProtocolVersion3)
         {
             SAL_FUNC_ERROR("Pong timeout");
@@ -567,9 +584,12 @@ namespace sio
         {
             return;
         }
-        if(m_con_state == con_closed)
+        // close() sets con_closing before m_abort_retries: a close that lands before
+        // the exchange makes it fail, and one that lands after it is caught by
+        // on_open's con_closing check.
+        con_state expected = con_closed;
+        if(!m_abort_retries && m_con_state.compare_exchange_strong(expected, con_opening))
         {
-            m_con_state = con_opening;
             m_reconn_made++;
 			m_reconn_made_time = time(0);
 			this->sockets_invoke_void(&sio::socket::on_close);
@@ -682,8 +702,13 @@ namespace sio
             return;
         }
         SAL_FUNC_INFO("Client Disconnected.");
-        con_state m_con_state_was = m_con_state;
-        m_con_state = con_closed;
+        con_state m_con_state_was;
+        {
+            // See ping_timers_allowed.
+            std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
+            m_con_state_was = m_con_state.exchange(con_closed);
+            this->clear_timers();
+        }
         lib::error_code ec;
         close::status::value code = close::status::normal;
         client_type::connection_ptr conn_ptr  = m_client.get_con_from_hdl(con, ec);
@@ -696,7 +721,6 @@ namespace sio
         }
 
         m_con.reset();
-        this->clear_timers();
         client::close_reason reason;
 
         // If we initiated the close, no matter what the close status was,
@@ -882,16 +906,32 @@ failed:
         timer.reset();
 	}
 
+    bool client_impl::ping_timers_allowed() const
+    {
+        // A send that fails runs on_close (on this thread or another) and clears these
+        // timers; a caller that re-arms right after its send would leave a stale
+        // timeout firing mid-reconnect, or against the connection that replaced this
+        // one. Callers hold m_timer_mutex from this check through the arming, and
+        // on_close flips the state under the same lock.
+        if (m_con_state == con_opened) return true;
+        SAL_FUNC_DEBUG("Not arming ping timers, connection not open (state %d)", (int)m_con_state.load());
+        return false;
+    }
+
     void client_impl::update_send_timer() {
         if (m_protocol_version > ProtocolVersion3) { // both can come here but only v3
             // in protocol v3, the client sends a ping, and the server answers with a pong
             return;
         }
+        std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
+        if (!ping_timers_allowed()) return;
         SAL_FUNC_DEBUG("Set m_send_timer %" PRId64, (int64_t)m_ping_interval);
 		update_timer(m_send_timer, m_ping_interval, &client_impl::timeout_send );
     }
 
     void client_impl::update_timeout_timer() {// both can come here
+        std::lock_guard<std::recursive_mutex> lk(m_timer_mutex);
+        if (!ping_timers_allowed()) return;
         int64_t _timeout = m_ping_timeout + (m_protocol_version > ProtocolVersion3 ? m_ping_interval : 0);
         SAL_FUNC_DEBUG("Set m_timeout_timer %" PRId64, _timeout);
         update_timer(m_timeout_timer, _timeout, &client_impl::timeout_wait);

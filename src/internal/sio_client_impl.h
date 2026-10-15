@@ -195,6 +195,8 @@ namespace sio
 
         void update_send_timer();
 
+        bool ping_timers_allowed() const;
+
 #if SIO_TLS
         typedef websocketpp::lib::shared_ptr<asio::ssl::context> context_ptr;
 
@@ -249,7 +251,7 @@ namespace sio
         TIMER m_timeout_timer;
         TIMER m_reconn_timer;
 
-        con_state m_con_state;
+        std::atomic<con_state> m_con_state;
 
         client::con_listener m_open_listener;
         client::con_listener m_fail_listener;
