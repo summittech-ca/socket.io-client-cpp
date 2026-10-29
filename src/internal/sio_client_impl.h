@@ -131,7 +131,13 @@ namespace sio
     private:
         void run_loop();
 
+        void connect_on_queue(const std::string& uri, const std::map<std::string, std::string>& queryString,
+                              const std::map<std::string, std::string>& httpExtraHeaders, const message::ptr& auth);
         void connect_impl(const std::string& uri, const std::string& query);
+#ifdef _SAL_TIME_H
+        // Runs task on the socket-queue thread, unless this client has been torn down by then.
+        void run_on_queue(const std::function<void()> &task);
+#endif
 
         void close_impl(close::status::value const& code,std::string const& reason);
 
@@ -279,6 +285,9 @@ namespace sio
         ProtocolVersion m_protocol_version;
 
         std::atomic<bool> m_abort_retries { false };
+        // Cleared on the socket-queue thread once sync_close has torn the connection down;
+        // shared with work posted to that thread so it can tell the client is gone.
+        std::shared_ptr<std::atomic<bool>> m_alive { std::make_shared<std::atomic<bool>>(true) };
 
         friend class sio::client;
         friend class sio::socket;
