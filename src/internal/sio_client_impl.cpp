@@ -202,7 +202,7 @@ namespace sio
     {
         // Captured before the namespace sockets close: closing "/" re-enters on_close,
         // which resets m_con.
-        connection_hdl target = m_con;
+        connection_hdl target = get_con();
         m_con_state = con_closing;
         m_abort_retries = true;
         this->sockets_invoke_void(&sio::socket::close);
@@ -313,16 +313,17 @@ namespace sio
 #endif
     void client_impl::on_socket_closed(string const& nsp)
     {
-        if(m_socket_close_listener)m_socket_close_listener(nsp);
+        if(auto l = listener(m_socket_close_listener)) l(nsp);
         SAL_FUNC_INFO("on_close if nsp==/");
         // m_con is already empty when "/" closes as part of a reconnect or after the
         // connection itself closed; there is nothing left to close then.
-        if (nsp == "/" && !m_con.expired()) on_close(m_con);
+        connection_hdl con = get_con();
+        if (nsp == "/" && !con.expired()) on_close(con);
     }
 
     void client_impl::on_socket_opened(string const& nsp)
     {
-        if(m_socket_open_listener)m_socket_open_listener(nsp);
+        if(auto l = listener(m_socket_open_listener)) l(nsp);
     }
 
     /*************************private:*************************/
@@ -395,15 +396,15 @@ namespace sio
             return;
         }
         while(0);
-        if(m_fail_listener)
+        if(auto l = listener(m_fail_listener))
         {
-            m_fail_listener();
+            l();
         }
     }
 
     void client_impl::close_impl(close::status::value const& code,string const& reason)
     {
-        close_impl(m_con, code, reason);
+        close_impl(get_con(), code, reason);
     }
 
     void client_impl::close_impl(connection_hdl con, close::status::value const& code, string const& reason)
@@ -444,7 +445,7 @@ namespace sio
             m_con_strong.reset();
             m_current_con.reset();
         }
-        m_con.reset();
+        set_con(connection_hdl());
         if (!old)
         {
             return;
@@ -518,10 +519,11 @@ namespace sio
             con = m_con_strong;
             m_con_strong.reset();
         }
-        if (!con && !m_con.expired())
+        connection_hdl hdl = get_con();
+        if (!con && !hdl.expired())
         {
             lib::error_code ec;
-            con = m_client.get_con_from_hdl(m_con, ec);
+            con = m_client.get_con_from_hdl(hdl, ec);
             if (ec) con.reset();
         }
 
@@ -541,7 +543,7 @@ namespace sio
         if(m_con_state == con_opened)
         {
             lib::error_code ec;
-            m_client.send(m_con,*payload_ptr,opcode,ec);
+            m_client.send(get_con(),*payload_ptr,opcode,ec);
             if(ec)
             {
                 cerr<<"Send failed,reason:"<< ec.message()<<endl;
@@ -614,7 +616,7 @@ namespace sio
             this->retire_current_connection();
             this->reset_states();
             SAL_FUNC_INFO("Reconnecting...");
-            if(m_reconnecting_listener) m_reconnecting_listener();
+            if(auto l = listener(m_reconnecting_listener)) l();
             this->connect_impl(m_base_url,m_query_string);
         }
     }
@@ -664,7 +666,7 @@ namespace sio
             return;
         }
 
-        m_con.reset();
+        set_con(connection_hdl());
         m_con_state = con_closed;
         this->sockets_invoke_void(&sio::socket::on_disconnect);
         SAL_FUNC_ERROR("Connection failed.");
@@ -672,12 +674,12 @@ namespace sio
         {
             SAL_FUNC_WARN("Reconnect for attempt: %" PRId64, (int64_t)m_reconn_made);
             unsigned delay = this->next_delay();
-            if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
+            if(auto l = listener(m_reconnect_listener)) l(m_reconn_made,delay);
             update_timer(m_reconn_timer, delay, &client_impl::timeout_reconnect);
         }
         else
         {
-            if(m_fail_listener)m_fail_listener();
+            if(auto l = listener(m_fail_listener)) l();
         }
     }
 
@@ -695,7 +697,7 @@ namespace sio
 
         SAL_FUNC_INFO("Connected.");
         m_con_state = con_opened;
-        m_con = con;
+        set_con(con);
         {
             // Refresh the strong ref from the now-open handle (connect_impl
             // already captured it before the socket was registered). Same lock
@@ -708,7 +710,7 @@ namespace sio
         m_reconn_made = 0;
         this->sockets_invoke_void(&sio::socket::on_open);
         this->socket("");
-        if(m_open_listener)m_open_listener();
+        if(auto l = listener(m_open_listener)) l();
     }
 
     void client_impl::on_close(connection_hdl con)
@@ -738,7 +740,7 @@ namespace sio
             code = conn_ptr->get_local_close_code();
         }
 
-        m_con.reset();
+        set_con(connection_hdl());
         client::close_reason reason;
 
         // If we initiated the close, no matter what the close status was,
@@ -756,16 +758,16 @@ namespace sio
             {
                 SAL_FUNC_WARN("Reconnect for attempt: %d", m_reconn_made);
                 unsigned delay = this->next_delay();
-                if(m_reconnect_listener) m_reconnect_listener(m_reconn_made,delay);
+                if(auto l = listener(m_reconnect_listener)) l(m_reconn_made,delay);
                 update_timer(m_reconn_timer, delay, &client_impl::timeout_reconnect);
                 return;
             }
             reason = client::close_reason_drop;
         }
 
-        if(m_close_listener)
+        if(auto l = listener(m_close_listener))
         {
-            m_close_listener(reason);
+            l(reason);
         }
     }
 

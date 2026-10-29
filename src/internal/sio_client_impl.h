@@ -54,7 +54,7 @@ namespace sio
         //set listeners and event bindings.
 #define SYNTHESIS_SETTER(__TYPE__,__FIELD__) \
     void set_##__FIELD__(__TYPE__ const& l) \
-        { m_##__FIELD__ = l;}
+        { std::lock_guard<std::mutex> guard(m_listener_mutex); m_##__FIELD__ = l;}
 
         SYNTHESIS_SETTER(client::con_listener,open_listener)
 
@@ -75,6 +75,7 @@ namespace sio
 
         void clear_con_listeners()
         {
+            std::lock_guard<std::mutex> guard(m_listener_mutex);
             m_open_listener = nullptr;
             m_close_listener = nullptr;
             m_fail_listener = nullptr;
@@ -84,6 +85,7 @@ namespace sio
 
         void clear_socket_listeners()
         {
+            std::lock_guard<std::mutex> guard(m_listener_mutex);
             m_socket_open_listener = nullptr;
             m_socket_close_listener = nullptr;
         }
@@ -212,8 +214,32 @@ namespace sio
         // Percent encode query string
         std::string encode_query_string(const std::string &query);
 
-        // Connection pointer for client functions.
+        // The listeners are set from the app's threads and called on the socket-queue
+        // thread: take a copy under the lock and call that.
+        template<typename L>
+        L listener(L const& l)
+        {
+            std::lock_guard<std::mutex> guard(m_listener_mutex);
+            return l;
+        }
+
+        connection_hdl get_con()
+        {
+            std::lock_guard<std::mutex> guard(m_con_mutex);
+            return m_con;
+        }
+
+        void set_con(connection_hdl const& con)
+        {
+            std::lock_guard<std::mutex> guard(m_con_mutex);
+            m_con = con;
+        }
+
+        // Connection pointer for client functions. Set on the socket-queue thread, but
+        // also read and reset by close() on the caller's thread: use get_con()/set_con().
         connection_hdl m_con;
+        std::mutex m_con_mutex;
+        std::mutex m_listener_mutex;
         client_type m_client;
         // Strong reference to the active connection, captured at on_open.
         // m_con (a weak connection_hdl) is reset by on_close, which
