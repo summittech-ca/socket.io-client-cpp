@@ -83,6 +83,19 @@ namespace sio
 
     void client_impl::connect(const string& uri, const map<string,string>& query, const map<string, string>& headers, const message::ptr& auth)
     {
+#ifdef _SAL_TIME_H
+        // Connection state is owned by the socket-queue thread (transport callbacks
+        // and timer handlers run there too); callers may be on any thread.
+        run_on_queue([this, uri, query, headers, auth]() {
+            this->connect_on_queue(uri, query, headers, auth);
+        });
+#else
+        connect_on_queue(uri, query, headers, auth);
+#endif
+    }
+
+    void client_impl::connect_on_queue(const string& uri, const map<string,string>& query, const map<string, string>& headers, const message::ptr& auth)
+    {
         reset_timer(m_reconn_timer);
         if(m_network_thread)
         {
@@ -223,6 +236,7 @@ namespace sio
         {
             SAL_FUNC_INFO("sync_close: force-terminating inline (already on socket-queue thread)");
             force_close_impl();
+            *m_alive = false;
             SAL_FUNC_INFO("sync_close: close completed (inline)");
         }
         else
@@ -232,6 +246,8 @@ namespace sio
             SAL::MSocketQueueManager::Post([this, &done]() {
                 SAL_FUNC_INFO("sync_close: force_close_impl running on socket-queue thread");
                 this->force_close_impl();
+                // Work posted after this point (late timers, DNS replies) must not touch us.
+                *this->m_alive = false;
                 done.signal();
             });
             // Bounded wait. A live loop runs the task within its 1s heartbeat;
@@ -885,7 +901,13 @@ failed:
     {
         SAL_FUNC_VERBOSE("encoded payload length: %ld", (long) payload->length());
         // m_client.get_io_service().dispatch(std::bind(&client_impl::send_impl,this,payload,isBinary?frame::opcode::binary:frame::opcode::text));
-        send_impl(payload,isBinary?frame::opcode::binary:frame::opcode::text);
+        const frame::opcode::value opcode = isBinary ? frame::opcode::binary : frame::opcode::text;
+#ifdef _SAL_TIME_H
+        // emit() may come from any thread; the transport is driven by the socket-queue thread.
+        run_on_queue([this, payload, opcode]() { this->send_impl(payload, opcode); });
+#else
+        send_impl(payload, opcode);
+#endif
     }
 
     void client_impl::clear_timers()
@@ -954,6 +976,17 @@ failed:
 #endif
 
 	}
+
+#ifdef _SAL_TIME_H
+    void client_impl::run_on_queue(const std::function<void()> &task)
+    {
+        std::shared_ptr<std::atomic<bool>> alive = m_alive;
+        SAL::MSocketQueueManager::Post([alive, task]() {
+            if (*alive)
+                task();
+        });
+    }
+#endif
 
     void client_impl::reset_states()
     {
