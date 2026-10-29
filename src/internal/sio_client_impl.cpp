@@ -242,18 +242,18 @@ namespace sio
         else
         {
             SAL_FUNC_INFO("sync_close: dispatching force-close to socket-queue thread and waiting");
-            SAL::Event done(false);
-            SAL::MSocketQueueManager::Post([this, &done]() {
+            std::shared_ptr<SAL::Event> done = std::make_shared<SAL::Event>(false);
+            SAL::MSocketQueueManager::Post([this, done]() {
                 SAL_FUNC_INFO("sync_close: force_close_impl running on socket-queue thread");
                 this->force_close_impl();
                 // Work posted after this point (late timers, DNS replies) must not touch us.
                 *this->m_alive = false;
-                done.signal();
+                done->signal();
             });
             // Bounded wait. A live loop runs the task within its 1s heartbeat;
             // the timeout only guards against a wedged/dead loop so teardown
             // can't block forever.
-            if (!done.wait(5000))
+            if (!done->wait(5000))
             {
                 SAL_FUNC_ERROR("sync_close: timed out waiting for socket-queue close");
             }
@@ -261,6 +261,8 @@ namespace sio
             {
                 SAL_FUNC_INFO("sync_close: close completed on socket-queue thread");
             }
+            // Nothing posted may touch this client once the destructor returns.
+            *m_alive = false;
         }
 #else
         close_impl(close::status::normal,"End by user");
