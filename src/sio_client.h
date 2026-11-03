@@ -79,6 +79,11 @@ namespace sio
 
         void set_reconnect_delay_max(unsigned millis);
 
+        // Network came back: if the client is between reconnect attempts (or gave up after
+        // the last one), reset the backoff and retry in delay_ms instead of waiting for the
+        // pending backoff timer. No-op while connected/connecting or after close().
+        void reconnect_now(unsigned delay_ms = 0);
+
         void set_logs_default();
 
         void set_logs_quiet();
