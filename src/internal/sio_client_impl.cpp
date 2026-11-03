@@ -621,6 +621,29 @@ namespace sio
         }
     }
 
+    void client_impl::reconnect_now(unsigned delay_ms)
+    {
+        auto task = [this, delay_ms]() {
+            // Only between attempts (or after the last one gave up): connected, opening and
+            // closing states have their own path, and a user close() must stay closed.
+            if (m_abort_retries || m_con_state != con_closed || m_base_url.empty())
+            {
+                SAL_FUNC_DEBUG("Not reconnecting now (state %d, abort %d)", (int)m_con_state.load(), (int)m_abort_retries.load());
+                return;
+            }
+            // A new network is a fresh start: full retry budget, backoff from the base delay.
+            SAL_FUNC_INFO("Network changed, reconnecting in %u ms (was attempt %u)", delay_ms, m_reconn_made);
+            m_reconn_made = 0;
+            // Replaces the pending backoff timer; repeated calls just re-arm it (debounce).
+            update_timer(m_reconn_timer, (int)delay_ms, &client_impl::timeout_reconnect);
+        };
+#ifdef _SAL_TIME_H
+        run_on_queue(task);
+#else
+        m_client.get_io_service().dispatch(task);
+#endif
+    }
+
     unsigned client_impl::next_delay() const
     {
         //no jitter, fixed power root.

@@ -111,6 +111,9 @@ namespace sio
 
         void set_reconnect_delay_max(unsigned millis) {m_reconn_delay_max = millis;if(m_reconn_delay>millis) m_reconn_delay = millis;}
 
+        // See client::reconnect_now()
+        void reconnect_now(unsigned delay_ms);
+
         void set_logs_default();
 
         void set_logs_quiet();

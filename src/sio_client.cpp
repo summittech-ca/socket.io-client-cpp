@@ -135,6 +135,11 @@ namespace sio
         m_impl->set_reconnect_attempts(attempts);
     }
 
+    void client::reconnect_now(unsigned delay_ms)
+    {
+        m_impl->reconnect_now(delay_ms);
+    }
+
     void client::set_reconnect_delay(unsigned millis)
     {
         m_impl->set_reconnect_delay(millis);
