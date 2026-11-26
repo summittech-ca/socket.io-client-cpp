@@ -77,6 +77,23 @@ namespace sio
 
     client_impl::~client_impl()
     {
+#ifdef _SAL_TIME_H
+        // Invalidate work already posted through run_on_queue (notably close()),
+        // BEFORE tearing down. A task that starts after this store returns
+        // without touching `this`:
+        //  - destroyed ON the socket-queue thread (last ref dropped by an HTTP
+        //    callback): sync_close runs inline, the tasks are still queued and
+        //    would run after we are freed;
+        //  - destroyed off that thread while sync_close cannot order against
+        //    them (queue hooks cleared → Post runs inline, or the 5s wait times
+        //    out): they may run concurrently with or after teardown.
+        // Normal off-thread case: they would have run before sync_close's own
+        // task (FIFO); skipping a graceful close_impl is fine because
+        // force_close_impl terminates the connection anyway.
+        // A task already past the check is not covered by this flag; in the
+        // normal case sync_close's FIFO wait still orders it before the free.
+        *m_alive = false;
+#endif
         this->sockets_invoke_void(&sio::socket::on_close);
         sync_close();
     }
@@ -212,7 +229,11 @@ namespace sio
         // handling. Post() runs inline when already on that thread (the common
         // case here: close() is invoked from on_fail/on_open).
         SAL_FUNC_INFO("close(): posting close_impl to socket-queue thread");
-        SAL::MSocketQueueManager::Post([this, target]() {
+        // run_on_queue, not a bare Post: the task captures a raw `this`, and
+        // ~client_impl can run on the queue thread (sync_close inline path)
+        // while this task is still queued. run_on_queue drops it once m_alive
+        // is false instead of locking a freed m_timer_mutex (ON-3213).
+        run_on_queue([this, target]() {
             SAL_FUNC_INFO("close(): close_impl running on socket-queue thread");
             this->close_impl(target, close::status::normal, "End by user");
         });
